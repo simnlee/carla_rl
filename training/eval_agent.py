@@ -64,7 +64,7 @@ def find_latest_model(root_path: Path) -> Optional[Path]:
     latest_model_file_path: Optional[Path] = Path(os.path.join(logs_path, paths_dict[max(paths_dict.keys())]))
     return latest_model_file_path
 
-def get_env(wandb_run) -> gym.Env:
+def get_env(wandb_run, video_dir: Path) -> gym.Env:
     env = asyncio.run(initialize_roar_env(
         control_timestep=1.0/RUN_FPS, 
         physics_timestep=1.0/(RUN_FPS*SUBSTEPS_PER_STEP),
@@ -75,20 +75,29 @@ def get_env(wandb_run) -> gym.Env:
     env = FlattenActionWrapper(env)
     # env = gym.wrappers.TimeLimit(env, max_episode_steps=6000)
     env = gym.wrappers.RecordEpisodeStatistics(env)
-    env = gym.wrappers.RecordVideo(env, f"videos/{wandb_run.name}_eval_{wandb_run.id}")
+    env = gym.wrappers.RecordVideo(env, video_dir.as_posix())
     env = Monitor(env, f"logs/{wandb_run.name}_{wandb_run.id}", allow_early_resets=True)
     return env
+
+def log_recorded_videos(wandb_run, video_dir: Path) -> None:
+    if not video_dir.exists():
+        return
+    video_paths = sorted(video_dir.glob("*.mp4"))
+    if not video_paths:
+        return
+    for video_path in video_paths:
+        wandb_run.log({f"video/{video_path.stem}": wandb.Video(str(video_path))})
 
 def main():
     wandb_run = wandb.init(
         project="ROAR_PY_RL",
-        entity="roar",
         name="Denser_Waypoints_And_Collision_Detection",
         sync_tensorboard=True,
-        monitor_gym=True,
+        monitor_gym=False,
     ) 
     
-    env = get_env(wandb_run)
+    video_dir = Path("videos") / f"{wandb_run.name}_eval_{wandb_run.id}"
+    env = get_env(wandb_run, video_dir)
 
     models_path = f"models/{wandb_run.name}"
     latest_model_path = find_latest_model(Path(models_path))
@@ -117,6 +126,7 @@ def main():
                 break
     finally:
         env.close()
+        log_recorded_videos(wandb_run, video_dir)
         return
 
 if __name__ == "__main__":
