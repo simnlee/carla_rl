@@ -145,7 +145,7 @@ class RoarRLSimEnv(RoarRLEnv):
         collision_impulse : np.ndarray = self.collision_sensor.get_last_gym_observation()
         collision_impulse_norm = np.linalg.norm(collision_impulse)
         if collision_impulse_norm > 0:
-            print(f"Collision detected with impulse {collision_impulse_norm}", self.collision_sensor.get_last_observation().impulse_normals)
+            print(f"Collision detected with impulse {collision_impulse_norm}", self.collision_sensor.get_last_observation().impulse_normal)
         if collision_impulse_norm > self.collision_threshold:
             print("Terminated due to collision")
             return True
