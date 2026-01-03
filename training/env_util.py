@@ -47,14 +47,23 @@ async def initialize_roar_env(
     physics_timestep : float = 0.01,
     waypoint_information_distances : list = [2.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 80.0, 100.0],
     image_width : int = 400,
-    image_height : int = 200
+    image_height : int = 200,
+    enable_rendering : bool = True
 ):
     carla_client = carla.Client(carla_host, carla_port)
     carla_client.set_timeout(15.0)
+    
     roar_py_instance = roar_py_carla.RoarPyCarlaInstance(carla_client)
     world = roar_py_instance.world
     world.set_control_steps(control_timestep, physics_timestep)
     world.set_asynchronous(False)
+    
+    # Toggle CARLA render pipeline for training speed.
+    carla_world = roar_py_instance.world.carla_world
+    settings = carla_world.get_settings()
+    settings.no_rendering_mode = not enable_rendering
+    carla_world.apply_settings(settings)
+    print(f"CARLA rendering enabled: {enable_rendering}")
     await world.step()
     roar_py_instance.clean_actors_not_registered(["vehicle.*", "sensor.*"])
 
@@ -82,13 +91,14 @@ async def initialize_roar_env(
     location_sensor = vehicle.attach_location_in_world_sensor("location")
     rpy_sensor = vehicle.attach_roll_pitch_yaw_sensor("roll_pitch_yaw")
     gyroscope_sensor = vehicle.attach_gyroscope_sensor("gyroscope")
-    camera = vehicle.attach_camera_sensor(
-        roar_py_interface.RoarPyCameraSensorDataRGB, # Specify what kind of data you want to receive
-        np.array([-2.0 * vehicle.bounding_box.extent[0], 0.0, 3.0 * vehicle.bounding_box.extent[2]]), # relative position
-        np.array([0, 10/180.0*np.pi, 0]), # relative rotation
-        image_width=image_width,
-        image_height=image_height
-    )
+    if enable_rendering:
+        camera = vehicle.attach_camera_sensor(
+            roar_py_interface.RoarPyCameraSensorDataRGB, # Specify what kind of data you want to receive
+            np.array([-2.0 * vehicle.bounding_box.extent[0], 0.0, 3.0 * vehicle.bounding_box.extent[2]]), # relative position
+            np.array([0, 10/180.0*np.pi, 0]), # relative rotation
+            image_width=image_width,
+            image_height=image_height
+        )
     # occupancy_map_sensor = vehicle.attach_occupancy_map_sensor(
     #     50,
     #     50,
