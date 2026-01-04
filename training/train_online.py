@@ -23,7 +23,9 @@ SUBSTEPS_PER_STEP = 5
 MODEL_SAVE_FREQ = 50_000
 VIDEO_SAVE_FREQ = 20_000
 TIME_LIMIT = RUN_FPS * 2 * 60
-run_name = "Denser_Waypoints_And_Collision_Detection"
+PROJECT_NAME = "CARLA_RL"
+RUN_NAME = "Denser_Waypoints_And_Collision_Detection"
+ENABLE_RENDERING = False
 
 training_params = dict(
     learning_rate = 1e-5,  # be smaller 2.5e-4
@@ -40,7 +42,7 @@ training_params = dict(
     use_sde=True,
     sde_sample_freq = RUN_FPS * 2,
     # target_kl=None,
-    # tensorboard_log=(Path(misc_params["model_directory"]) / "tensorboard").as_posix(),
+    tensorboard_log=f"./runs/{RUN_NAME}",  # Enable tensorboard logging for wandb sync
     # create_eval_env=False,
     # policy_kwargs=None,
     verbose=1,
@@ -67,20 +69,26 @@ def find_latest_model(root_path: Path) -> Optional[Path]:
     return latest_model_file_path
 
 def get_env(wandb_run) -> gym.Env:
-    env = asyncio.run(initialize_roar_env(control_timestep=1.0/RUN_FPS, physics_timestep=1.0/(RUN_FPS*SUBSTEPS_PER_STEP)))
+    env = asyncio.run(
+        initialize_roar_env(
+            control_timestep=1.0 / RUN_FPS,
+            physics_timestep=1.0 / (RUN_FPS * SUBSTEPS_PER_STEP),
+            enable_rendering=ENABLE_RENDERING
+        )
+    )
     env = gym.wrappers.FlattenObservation(env)
     env = FlattenActionWrapper(env)
     env = gym.wrappers.TimeLimit(env, max_episode_steps = TIME_LIMIT)
     env = gym.wrappers.RecordEpisodeStatistics(env)
-    env = gym.wrappers.RecordVideo(env, f"videos/{wandb_run.name}", step_trigger=lambda x: x % VIDEO_SAVE_FREQ == 0)
+    if ENABLE_RENDERING:
+        env = gym.wrappers.RecordVideo(env, f"videos/{wandb_run.name}", step_trigger=lambda x: x % VIDEO_SAVE_FREQ == 0)
     env = Monitor(env, f"logs/{wandb_run.name}_{wandb_run.id}", allow_early_resets=True)
     return env
 
 def main():
     wandb_run = wandb.init(
-        project="ROAR_PY_RL",
-        entity="roar",
-        name=run_name,
+        project=PROJECT_NAME,
+        name=RUN_NAME,
         sync_tensorboard=True,
         monitor_gym=True,
         save_code=True
