@@ -14,9 +14,20 @@ from pathlib import Path
 from typing import Optional, Dict
 import torch as th
 from typing import Dict, SupportsFloat, Union
+from roar_py_carla.sensors import carla_lidar_sensor
 from env_util import initialize_roar_env
 from roar_py_rl_carla import FlattenActionWrapper
 from stable_baselines3.common.callbacks import CheckpointCallback, EveryNTimesteps, CallbackList, BaseCallback
+
+def _patch_carla_lidar_name_mangling() -> None:
+    converter = getattr(carla_lidar_sensor, "__convert_carla_lidar_raw_to_roar_py", None)
+    if converter is None:
+        return
+    mangled_name = "_RoarPyCarlaLiDARSensor__convert_carla_lidar_raw_to_roar_py"
+    if not hasattr(carla_lidar_sensor, mangled_name):
+        setattr(carla_lidar_sensor, mangled_name, converter)
+
+_patch_carla_lidar_name_mangling()
 
 RUN_FPS=25
 SUBSTEPS_PER_STEP = 5
