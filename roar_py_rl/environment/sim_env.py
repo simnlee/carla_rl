@@ -113,7 +113,8 @@ class RoarRLSimEnv(RoarRLEnv):
         
         collision_penalty = collision_impulse_norm / 10
         if collision_impulse_norm > self.collision_threshold:
-            return 0 # -collision_penalty
+            # return a large negative reward. episode reward is usually around 14k
+            return -20000 # -collision_penalty
 
         dist_to_projection = np.linalg.norm(self.location_sensor.get_last_gym_observation() - self._traced_projection_point.location)
         if self._delta_distance_travelled <= 0:

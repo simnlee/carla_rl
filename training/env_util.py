@@ -40,6 +40,59 @@ class SimplifyCarlaActionFilter(gym.ActionWrapper):
         }
         return real_action
 
+class LidarObservationWrapper(gym.ObservationWrapper):
+    def __init__(
+        self,
+        env: gym.Env,
+        lidar_key: str = "lidar",
+        num_beams: int = 20,
+        max_distance: float = 50.0,
+    ):
+        super().__init__(env)
+        self.lidar_key = lidar_key
+        self.num_beams = num_beams
+        self.max_distance = max_distance
+        self.observation_space = self._build_observation_space()
+
+    def _build_observation_space(self) -> gym.spaces.Dict:
+        base_space = self.env.observation_space
+        if not isinstance(base_space, gym.spaces.Dict):
+            raise TypeError("LidarObservationWrapper expects a Dict observation space")
+        spaces = base_space.spaces.copy()
+        spaces.pop(self.lidar_key, None)
+        spaces["lidar_20"] = gym.spaces.Box(
+            low=0.0,
+            high=1.0,
+            shape=(self.num_beams,),
+            dtype=np.float32
+        )
+        return gym.spaces.Dict(spaces)
+
+    def observation(self, observation: Dict[str, Any]) -> Dict[str, Any]:
+        if self.lidar_key not in observation:
+            return observation
+        points = observation[self.lidar_key]
+        beams = np.full(self.num_beams, self.max_distance, dtype=np.float32)
+
+        if points is not None and len(points) > 0:
+            points = np.asarray(points)
+            if points.ndim == 1:
+                points = points.reshape(1, -1)
+            xyz = points[:, :3]
+            dists = np.linalg.norm(xyz, axis=1)
+            angles = np.arctan2(xyz[:, 1], xyz[:, 0])
+            angles = (angles + 2 * np.pi) % (2 * np.pi)
+            bin_ids = (angles / (2 * np.pi) * self.num_beams).astype(np.int64)
+            for bin_id, dist in zip(bin_ids, dists):
+                if dist < beams[bin_id]:
+                    beams[bin_id] = dist
+
+        beams = np.clip(beams / self.max_distance, 0.0, 1.0).astype(np.float32)
+        obs = dict(observation)
+        obs.pop(self.lidar_key, None)
+        obs["lidar_20"] = beams
+        return obs
+
 async def initialize_roar_env(
     carla_host : str = "localhost", 
     carla_port : int = 2000, 
@@ -91,6 +144,27 @@ async def initialize_roar_env(
     location_sensor = vehicle.attach_location_in_world_sensor("location")
     rpy_sensor = vehicle.attach_roll_pitch_yaw_sensor("roll_pitch_yaw")
     gyroscope_sensor = vehicle.attach_gyroscope_sensor("gyroscope")
+    lidar_max_distance = 50.0
+    if control_timestep > 0:
+        lidar_points_per_second = max(1, int(round((1.0 / control_timestep) * 20)))
+        lidar_rotation_frequency = 1.0 / control_timestep
+    else:
+        lidar_points_per_second = 20
+        lidar_rotation_frequency = 10.0
+    lidar_sensor = vehicle.attach_lidar_sensor(
+        np.array([0.0, 0.0, vehicle.bounding_box.extent[2] + 0.2]),
+        np.array([0.0, 0.0, 0.0]),
+        num_lasers=1,
+        max_distance=lidar_max_distance,
+        points_per_second=lidar_points_per_second,
+        rotation_frequency=lidar_rotation_frequency,
+        upper_fov=0.0,
+        lower_fov=0.0,
+        horizontal_fov=360.0,
+        control_timestep=control_timestep,
+        name="lidar"
+    )
+    assert lidar_sensor is not None, "Failed to attach lidar sensor"
     if enable_rendering:
         camera = vehicle.attach_camera_sensor(
             roar_py_interface.RoarPyCameraSensorDataRGB, # Specify what kind of data you want to receive
@@ -121,5 +195,6 @@ async def initialize_roar_env(
         collision_threshold = 1.0
     )
     env = SimplifyCarlaActionFilter(env)
-    env = gym.wrappers.FilterObservation(env, ["gyroscope", "waypoints_information", "local_velocimeter"])
+    env = LidarObservationWrapper(env, lidar_key="lidar", num_beams=20, max_distance=lidar_max_distance)
+    env = gym.wrappers.FilterObservation(env, ["gyroscope", "waypoints_information", "local_velocimeter", "lidar_20"])
     return env

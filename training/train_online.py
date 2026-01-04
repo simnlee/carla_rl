@@ -32,9 +32,9 @@ training_params = dict(
     #n_steps = 256 * RUN_FPS, #1024
     batch_size=256,  # mini_batch_size = 256?
     # n_epochs=10,
-    gamma=0.97,  # rec range .9 - .99 0.999997
+    gamma=0.9997,  # rec range .9 - .99 0.999997
     ent_coef="auto",
-    target_entropy=-10.0,
+    target_entropy="auto",
     # gae_lambda=0.95,
     # clip_range_vf=None,
     # vf_coef=0.5,
