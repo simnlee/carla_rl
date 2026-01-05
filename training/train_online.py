@@ -1,23 +1,26 @@
 import gymnasium as gym
-from gymnasium.core import Env
-import numpy as np
-from stable_baselines3 import SAC 
-from stable_baselines3.ppo.ppo import PPO
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, VecVideoRecorder
-import wandb
-from wandb.integration.sb3 import WandbCallback
-import asyncio
-import nest_asyncio
 import os
+import asyncio
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Callable
+
 import torch as th
-from typing import Dict, SupportsFloat, Union
+import wandb
+import nest_asyncio
+from dotenv import load_dotenv, find_dotenv
+from stable_baselines3 import SAC
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
+from stable_baselines3.common.callbacks import CheckpointCallback, EveryNTimesteps, CallbackList
+from stable_baselines3.common.utils import set_random_seed
+from wandb.integration.sb3 import WandbCallback
+
 from roar_py_carla.sensors import carla_lidar_sensor
 from env_util import initialize_roar_env
 from roar_py_rl_carla import FlattenActionWrapper
-from stable_baselines3.common.callbacks import CheckpointCallback, EveryNTimesteps, CallbackList, BaseCallback
+
+# Load environment variables from .env file (walk up from CWD)
+load_dotenv(find_dotenv(usecwd=True))
 
 def _patch_carla_lidar_name_mangling() -> None:
     converter = getattr(carla_lidar_sensor, "__convert_carla_lidar_raw_to_roar_py", None)
@@ -29,37 +32,37 @@ def _patch_carla_lidar_name_mangling() -> None:
 
 _patch_carla_lidar_name_mangling()
 
-RUN_FPS=25
-SUBSTEPS_PER_STEP = 5
-MODEL_SAVE_FREQ = 50_000
-VIDEO_SAVE_FREQ = 20_000
-TIME_LIMIT = RUN_FPS * 2 * 60
-PROJECT_NAME = "CARLA_RL"
-RUN_NAME = "Denser_Waypoints_And_Collision_Detection"
-ENABLE_RENDERING = False
+RUN_FPS = int(os.getenv("RUN_FPS", "25"))
+SUBSTEPS_PER_STEP = int(os.getenv("SUBSTEPS_PER_STEP", "5"))
+MODEL_SAVE_FREQ = int(os.getenv("MODEL_SAVE_FREQ", "50000"))
+TIME_LIMIT = int(os.getenv("TIME_LIMIT", str(RUN_FPS * 2 * 60)))
+PROJECT_NAME = os.getenv("PROJECT_NAME", "CARLA_RL_parallel")
+RUN_NAME = os.getenv("RUN_NAME", "Run4")
+ENABLE_RENDERING = os.getenv("ENABLE_RENDERING", "false") == "true"
 
+# Parallel training config (loaded from .env)
+N_ENVS = int(os.getenv("N_ENVS", "2"))
+BASE_PORT = int(os.getenv("BASE_PORT", "2000"))
+PORT_STRIDE = int(os.getenv("PORT_STRIDE", "2"))
+SEED = int(os.getenv("SEED", "1"))
+RESUME_CHECKPOINT = os.getenv("RESUME_CHECKPOINT", "").strip()
+
+# SAC training parameters
 training_params = dict(
-    learning_rate = 1e-5,  # be smaller 2.5e-4
-    #n_steps = 256 * RUN_FPS, #1024
-    batch_size=256,  # mini_batch_size = 256?
-    # n_epochs=10,
-    gamma=0.9997,  # rec range .9 - .99 0.999997
+    learning_rate=1e-4,
+    batch_size=256,
+    gamma=0.9997,
     ent_coef="auto",
     target_entropy="auto",
-    # gae_lambda=0.95,
-    # clip_range_vf=None,
-    # vf_coef=0.5,
-    # max_grad_norm=0.5,
     use_sde=True,
-    sde_sample_freq = RUN_FPS * 2,
-    # target_kl=None,
-    tensorboard_log=f"./runs/{RUN_NAME}",  # Enable tensorboard logging for wandb sync
-    # create_eval_env=False,
-    # policy_kwargs=None,
+    sde_sample_freq=RUN_FPS * 2,
+    tensorboard_log=f"./runs/{RUN_NAME}",
     verbose=1,
-    seed=1,
-    device=th.device('cuda' if th.cuda.is_available() else 'cpu'),
-    # _init_setup_model=True,
+    seed=SEED,
+    device=th.device("cuda" if th.cuda.is_available() else "cpu"),
+    # Multi-env adjustments: scale gradient_steps and learning_starts by N_ENVS
+    gradient_steps=N_ENVS,  # Do N gradient updates per env.step() call
+    learning_starts=100 * N_ENVS,  # Scale warmup by number of envs
 )
 
 def find_latest_model(root_path: Path) -> Optional[Path]:
@@ -79,9 +82,27 @@ def find_latest_model(root_path: Path) -> Optional[Path]:
     latest_model_file_path: Optional[Path] = Path(os.path.join(logs_path, paths_dict[max(paths_dict.keys())]))
     return latest_model_file_path
 
-def get_env(wandb_run) -> gym.Env:
+def _create_single_env(rank: int, run_name: str, run_id: str) -> gym.Env:
+    """
+    Create a single environment instance. Called in subprocess for parallel training.
+
+    Args:
+        rank: Environment index (0, 1, 2, ...) - determines CARLA port
+        run_name: W&B run name for logging
+        run_id: W&B run ID for logging
+    """
+    # Apply nest_asyncio in subprocess (needed for asyncio.run in spawned process)
+    nest_asyncio.apply()
+
+    # Apply lidar name mangling patch in subprocess
+    _patch_carla_lidar_name_mangling()
+
+    # Calculate port for this env
+    carla_port = BASE_PORT + (rank * PORT_STRIDE)
+
     env = asyncio.run(
         initialize_roar_env(
+            carla_port=carla_port,
             control_timestep=1.0 / RUN_FPS,
             physics_timestep=1.0 / (RUN_FPS * SUBSTEPS_PER_STEP),
             enable_rendering=ENABLE_RENDERING
@@ -89,12 +110,37 @@ def get_env(wandb_run) -> gym.Env:
     )
     env = gym.wrappers.FlattenObservation(env)
     env = FlattenActionWrapper(env)
-    env = gym.wrappers.TimeLimit(env, max_episode_steps = TIME_LIMIT)
+    env = gym.wrappers.TimeLimit(env, max_episode_steps=TIME_LIMIT)
     env = gym.wrappers.RecordEpisodeStatistics(env)
-    if ENABLE_RENDERING:
-        env = gym.wrappers.RecordVideo(env, f"videos/{wandb_run.name}", step_trigger=lambda x: x % VIDEO_SAVE_FREQ == 0)
-    env = Monitor(env, f"logs/{wandb_run.name}_{wandb_run.id}", allow_early_resets=True)
+
+    # Per-env Monitor logs to separate directories
+    log_dir = f"logs/{run_name}_{run_id}/env_{rank}"
+    os.makedirs(log_dir, exist_ok=True)
+    env = Monitor(env, log_dir, allow_early_resets=True)
+
+    # Seed for reproducibility (different seed per env)
+    env.reset(seed=SEED + rank)
+
     return env
+
+
+def make_env(rank: int, run_name: str, run_id: str) -> Callable[[], gym.Env]:
+    """
+    Factory function that returns a callable to create an environment.
+    Must be defined at module scope for Windows multiprocessing (pickling).
+
+    Args:
+        rank: Environment index
+        run_name: W&B run name
+        run_id: W&B run ID
+
+    Returns:
+        A callable that creates the environment
+    """
+    def _init() -> gym.Env:
+        set_random_seed(SEED + rank)
+        return _create_single_env(rank, run_name, run_id)
+    return _init
 
 def main():
     wandb_run = wandb.init(
@@ -102,52 +148,69 @@ def main():
         name=RUN_NAME,
         sync_tensorboard=True,
         monitor_gym=True,
-        save_code=True
+        save_code=True,
+        config={
+            "n_envs": N_ENVS,
+            "base_port": BASE_PORT,
+            "port_stride": PORT_STRIDE,
+            "seed": SEED,
+            "run_fps": RUN_FPS,
+        }
     )
-    
-    env = get_env(wandb_run)
+
+    # Create vectorized environment
+    print(f"Creating {N_ENVS} parallel environment(s)...")
+    env_fns = [make_env(rank, wandb_run.name, wandb_run.id) for rank in range(N_ENVS)]
+
+    if N_ENVS == 1:
+        # Single env: use DummyVecEnv (simpler, no subprocess overhead)
+        vec_env = DummyVecEnv(env_fns)
+    else:
+        # Multiple envs: use SubprocVecEnv for true parallelism
+        vec_env = SubprocVecEnv(env_fns, start_method="spawn")
+
+    # Wrap with VecMonitor for aggregated metrics
+    vec_env = VecMonitor(vec_env, f"logs/{wandb_run.name}_{wandb_run.id}")
 
     models_path = f"models/{wandb_run.name}"
-    latest_model_path = find_latest_model(Path(models_path))
-    
+    if RESUME_CHECKPOINT:
+        latest_model_path = Path(RESUME_CHECKPOINT)
+    else:
+        latest_model_path = find_latest_model(Path(models_path))
+
     if latest_model_path is None:
-        # create new models
         model = SAC(
             "MlpPolicy",
-            env,
-            # optimize_memory_usage=True,
+            vec_env,
             replay_buffer_kwargs={"handle_timeout_termination": True},
             **training_params
         )
     else:
-        # Load the model
-        print(f"reloading from {type(latest_model_path)} {latest_model_path}\n\n\n\n")
-        model = SAC.load( 
+        print(f"Reloading from {latest_model_path}\n")
+        model = SAC.load(
             latest_model_path,
-            env=env,
-            # optimize_memory_usage=True,
-            # replay_buffer_kwargs={"handle_timeout_termination": False}
+            env=vec_env,
             **training_params
         )
 
-    wandb_callback=WandbCallback(
-        gradient_save_freq = MODEL_SAVE_FREQ,
-        model_save_path = f"models/{wandb_run.name}",
-        verbose = 2,
+    wandb_callback = WandbCallback(
+        gradient_save_freq=MODEL_SAVE_FREQ,
+        model_save_path=f"models/{wandb_run.name}",
+        verbose=2,
     )
     checkpoint_callback = CheckpointCallback(
-        save_freq = MODEL_SAVE_FREQ,
-        verbose = 2,
-        save_path = f"{models_path}/logs"
+        save_freq=MODEL_SAVE_FREQ,
+        verbose=2,
+        save_path=f"{models_path}/logs"
     )
     event_callback = EveryNTimesteps(
-        n_steps = MODEL_SAVE_FREQ,
+        n_steps=MODEL_SAVE_FREQ,
         callback=checkpoint_callback
     )
 
     callbacks = CallbackList([
         wandb_callback,
-        checkpoint_callback, 
+        checkpoint_callback,
         event_callback
     ])
 
@@ -158,6 +221,13 @@ def main():
         reset_num_timesteps=False,
     )
 
+    # Clean up
+    vec_env.close()
+
+
 if __name__ == "__main__":
-    nest_asyncio.apply()
+    # Only apply nest_asyncio in main process for DummyVecEnv case
+    # SubprocVecEnv spawns new processes that apply it themselves
+    if N_ENVS == 1:
+        nest_asyncio.apply()
     main()

@@ -7,13 +7,13 @@ REM ============================================================================
 REM Usage:
 REM   start_carla_servers.cmd [options]
 REM
-REM The CARLA_EXE path is loaded from .env in the project root.
-REM Edit .env once to set your CarlaUE4.exe path.
+REM The CARLA_EXE, N_ENVS, BASE_PORT, and PORT_STRIDE values are loaded from
+REM .env in the project root (if present). CLI args override .env defaults.
 REM
 REM Options:
-REM   -n <N>               Number of servers to launch (default: 2)
-REM   -baseport <N>        Base RPC port (default: 2000)
-REM   -stride <N>          Port offset between instances (default: 2, min: 2)
+REM   -n <N>               Number of servers to launch (default: N_ENVS or 2)
+REM   -baseport <N>        Base RPC port (default: BASE_PORT or 2000)
+REM   -stride <N>          Port offset between instances (default: PORT_STRIDE or 2, min: 2)
 REM   -offscreen           Run all instances without rendering window
 REM   -nosound             Disable audio for all instances
 REM   -low                 Use low quality graphics for all instances
@@ -42,8 +42,8 @@ if not exist "%ENV_FILE%" (
     exit /b 1
 )
 
-for /f "usebackq tokens=1,* delims==" %%a in ("%ENV_FILE%") do (
-    set "%%a=%%b"
+for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%ENV_FILE%") do (
+    if not "%%a"=="" set "%%a=%%b"
 )
 
 if not defined CARLA_EXE (
@@ -60,10 +60,14 @@ if not exist "%CARLA_EXE%" (
 REM Get the directory containing CarlaUE4.exe
 for %%I in ("%CARLA_EXE%") do set "CARLA_DIR=%%~dpI"
 
-REM Default values
-set "NUM_SERVERS=2"
-set "BASE_PORT=2000"
-set "PORT_STRIDE=2"
+REM Default values (from .env if set)
+if defined N_ENVS (
+    set "NUM_SERVERS=%N_ENVS%"
+) else (
+    set "NUM_SERVERS=2"
+)
+if not defined BASE_PORT set "BASE_PORT=2000"
+if not defined PORT_STRIDE set "PORT_STRIDE=2"
 set "EXTRA_ARGS="
 set "WAIT_FOR_READY=0"
 
