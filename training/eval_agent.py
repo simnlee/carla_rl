@@ -18,11 +18,30 @@ from env_util import initialize_roar_env
 from roar_py_rl_carla import FlattenActionWrapper
 from stable_baselines3.common.callbacks import CheckpointCallback, EveryNTimesteps, CallbackList, BaseCallback
 import tqdm
+from roar_py_carla.sensors import carla_lidar_sensor
+from dotenv import load_dotenv, find_dotenv
 
-RUN_FPS= 25
-SUBSTEPS_PER_STEP = 5
-MODEL_SAVE_FREQ = 20_000
-VIDEO_SAVE_FREQ = 10_000
+load_dotenv(find_dotenv(usecwd=True))
+
+def _patch_carla_lidar_name_mangling() -> None:
+    converter = getattr(carla_lidar_sensor, "__convert_carla_lidar_raw_to_roar_py", None)
+    if converter is None:
+        return
+    mangled_name = "_RoarPyCarlaLiDARSensor__convert_carla_lidar_raw_to_roar_py"
+    if not hasattr(carla_lidar_sensor, mangled_name):
+        setattr(carla_lidar_sensor, mangled_name, converter)
+
+_patch_carla_lidar_name_mangling()
+
+RUN_FPS = int(os.getenv("RUN_FPS", "25"))
+SUBSTEPS_PER_STEP = int(os.getenv("SUBSTEPS_PER_STEP", "5"))
+MODEL_SAVE_FREQ = int(os.getenv("MODEL_SAVE_FREQ", "20000"))
+VIDEO_SAVE_FREQ = int(os.getenv("VIDEO_SAVE_FREQ", "10000"))
+VIDEO_SEGMENT_SECONDS = int(os.getenv("VIDEO_SEGMENT_SECONDS", "60"))
+PROJECT_NAME = os.getenv("PROJECT_NAME", "ROAR_PY_RL")
+RUN_NAME = os.getenv("RUN_NAME", "Denser_Waypoints_And_Collision_Detection")
+ENABLE_RENDERING = os.getenv("ENABLE_RENDERING", "true") == "true"
+SEED = int(os.getenv("SEED", "1"))
 training_params = dict(
     learning_rate = 1e-5,  # be smaller 2.5e-4
     #n_steps = 256 * RUN_FPS, #1024
@@ -42,7 +61,7 @@ training_params = dict(
     # create_eval_env=False,
     # policy_kwargs=None,
     verbose=1,
-    seed=1,
+    seed=SEED,
     device=th.device('cuda' if th.cuda.is_available() else 'cpu'),
     # _init_setup_model=True,
 )
@@ -69,13 +88,22 @@ def get_env(wandb_run, video_dir: Path) -> gym.Env:
         control_timestep=1.0/RUN_FPS, 
         physics_timestep=1.0/(RUN_FPS*SUBSTEPS_PER_STEP),
         image_width=1920,
-        image_height=1080
+        image_height=1080,
+        enable_rendering=ENABLE_RENDERING,
     ))
     env = gym.wrappers.FlattenObservation(env)
     env = FlattenActionWrapper(env)
     # env = gym.wrappers.TimeLimit(env, max_episode_steps=6000)
     env = gym.wrappers.RecordEpisodeStatistics(env)
-    env = gym.wrappers.RecordVideo(env, video_dir.as_posix())
+    if ENABLE_RENDERING:
+        segment_steps = max(1, RUN_FPS * VIDEO_SEGMENT_SECONDS)
+        env = gym.wrappers.RecordVideo(
+            env,
+            video_dir.as_posix(),
+            step_trigger=lambda step: step % segment_steps == 0,
+            video_length=segment_steps,
+            name_prefix="eval",
+        )
     env = Monitor(env, f"logs/{wandb_run.name}_{wandb_run.id}", allow_early_resets=True)
     return env
 
@@ -90,8 +118,8 @@ def log_recorded_videos(wandb_run, video_dir: Path) -> None:
 
 def main():
     wandb_run = wandb.init(
-        project="ROAR_PY_RL",
-        name="Denser_Waypoints_And_Collision_Detection",
+        project=PROJECT_NAME,
+        name=RUN_NAME,
         sync_tensorboard=True,
         monitor_gym=False,
     ) 

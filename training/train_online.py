@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional, Dict, Callable
 
+import numpy as np
 import torch as th
 import wandb
 import nest_asyncio
@@ -32,6 +33,87 @@ def _patch_carla_lidar_name_mangling() -> None:
 
 _patch_carla_lidar_name_mangling()
 
+class NaNCheckWrapper(gym.Wrapper):
+    def __init__(self, env: gym.Env, name: str) -> None:
+        super().__init__(env)
+        self._name = name
+        self._episode = 0
+        self._step = 0
+        self._skipped_keys = set()
+
+    def _check_array(
+        self,
+        value,
+        label: str,
+        where: str,
+        key: Optional[str] = None,
+        allow_non_numeric: bool = False,
+    ) -> None:
+        arr = np.asarray(value)
+        if not np.issubdtype(arr.dtype, np.number):
+            if allow_non_numeric:
+                if key is not None and key not in self._skipped_keys:
+                    print(
+                        f"[NaNCheck:{self._name}] skip non-numeric {label} key={key} "
+                        f"(episode={self._episode}, step={self._step})"
+                    )
+                    self._skipped_keys.add(key)
+                return
+            key_msg = f" key={key}" if key is not None else ""
+            raise ValueError(
+                f"[NaNCheck:{self._name}] non-numeric {label} in {where} "
+                f"(episode={self._episode}, step={self._step}){key_msg}"
+            )
+        if not np.all(np.isfinite(arr)):
+            key_msg = f" key={key}" if key is not None else ""
+            raise ValueError(
+                f"[NaNCheck:{self._name}] non-finite {label} in {where} "
+                f"(episode={self._episode}, step={self._step}){key_msg}"
+            )
+
+    def _check_obs(self, obs, where: str) -> None:
+        if isinstance(obs, dict):
+            for key, value in obs.items():
+                if value is None:
+                    continue
+                self._check_array(
+                    value,
+                    "observation",
+                    where,
+                    key=key,
+                    allow_non_numeric=True,
+                )
+            return
+        self._check_array(obs, "observation", where)
+
+    def _check_action(self, action, where: str) -> None:
+        if isinstance(action, dict):
+            for key, value in action.items():
+                if value is None:
+                    continue
+                self._check_array(value, "action", where, key=key)
+            return
+        self._check_array(action, "action", where)
+
+    def reset(self, **kwargs):
+        self._episode += 1
+        self._step = 0
+        obs, info = self.env.reset(**kwargs)
+        self._check_obs(obs, "reset")
+        return obs, info
+
+    def step(self, action):
+        self._check_action(action, "step")
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self._step += 1
+        self._check_obs(obs, "step")
+        if not np.isfinite(reward):
+            raise ValueError(
+                f"[NaNCheck:{self._name}] non-finite reward in step "
+                f"(episode={self._episode}, step={self._step}): {reward}"
+            )
+        return obs, reward, terminated, truncated, info
+
 RUN_FPS = int(os.getenv("RUN_FPS", "25"))
 SUBSTEPS_PER_STEP = int(os.getenv("SUBSTEPS_PER_STEP", "5"))
 MODEL_SAVE_FREQ = int(os.getenv("MODEL_SAVE_FREQ", "50000"))
@@ -39,6 +121,7 @@ TIME_LIMIT = int(os.getenv("TIME_LIMIT", str(RUN_FPS * 2 * 60)))
 PROJECT_NAME = os.getenv("PROJECT_NAME", "CARLA_RL_parallel")
 RUN_NAME = os.getenv("RUN_NAME", "Run4")
 ENABLE_RENDERING = os.getenv("ENABLE_RENDERING", "false") == "true"
+VIDEO_SAVE_FREQ = int(os.getenv("VIDEO_SAVE_FREQ", "20000"))
 
 # Parallel training config (loaded from .env)
 N_ENVS = int(os.getenv("N_ENVS", "2"))
@@ -49,9 +132,9 @@ RESUME_CHECKPOINT = os.getenv("RESUME_CHECKPOINT", "").strip()
 
 # SAC training parameters
 training_params = dict(
-    learning_rate=1e-4,
+    learning_rate=2e-5,
     batch_size=256,
-    gamma=0.9997,
+    gamma=0.99,
     ent_coef="auto",
     target_entropy="auto",
     use_sde=True,
@@ -108,10 +191,20 @@ def _create_single_env(rank: int, run_name: str, run_id: str) -> gym.Env:
             enable_rendering=ENABLE_RENDERING
         )
     )
+    env = NaNCheckWrapper(env, name=f"env_{rank}")
     env = gym.wrappers.FlattenObservation(env)
     env = FlattenActionWrapper(env)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=TIME_LIMIT)
     env = gym.wrappers.RecordEpisodeStatistics(env)
+    if ENABLE_RENDERING and VIDEO_SAVE_FREQ > 0 and rank == 0:
+        video_dir = Path("videos") / f"{run_name}_{run_id}"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        env = gym.wrappers.RecordVideo(
+            env,
+            video_dir.as_posix(),
+            step_trigger=lambda step: step % VIDEO_SAVE_FREQ == 0,
+            name_prefix="train",
+        )
 
     # Per-env Monitor logs to separate directories
     log_dir = f"logs/{run_name}_{run_id}/env_{rank}"
@@ -179,6 +272,7 @@ def main():
         latest_model_path = find_latest_model(Path(models_path))
 
     if latest_model_path is None:
+        print("No previous model found, starting fresh training...\n")
         model = SAC(
             "MlpPolicy",
             vec_env,
