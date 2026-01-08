@@ -111,21 +111,22 @@ class RoarRLSimEnv(RoarRLEnv):
         collision_impulse_norm = np.linalg.norm(collision_impulse)
         
         
-        collision_penalty = collision_impulse_norm / 10
-        if collision_impulse_norm > self.collision_threshold:
-            # Proportional penalty 
-            return -collision_penalty
+        collision_penalty = collision_impulse_norm / 10.0
 
-        dist_to_projection = np.linalg.norm(self.location_sensor.get_last_gym_observation() - self._traced_projection_point.location)
-        if self._delta_distance_travelled <= 0:
-            normalized_rew = self._delta_distance_travelled * 10.0 * (0.2 * dist_to_projection + 1.0)
-        else:
-            normalized_rew = self._delta_distance_travelled * 10.0 / (0.2 * dist_to_projection + 1.0)
-        # if normalized_rew < 0:
-        #     return np.exp(normalized_rew) # Gaussian-like penalty for going backwards
+        # Previous centerline-shaped reward (kept for reference):
+        # if collision_impulse_norm > self.collision_threshold:
+        #     # Proportional penalty
+        #     return -collision_penalty
+        # dist_to_projection = np.linalg.norm(self.location_sensor.get_last_gym_observation() - self._traced_projection_point.location)
+        # if self._delta_distance_travelled <= 0:
+        #     normalized_rew = self._delta_distance_travelled * 10.0 * (0.2 * dist_to_projection + 1.0)
         # else:
-        #     return normalized_rew + 1
-        return normalized_rew #- collision_penalty
+        #     normalized_rew = self._delta_distance_travelled * 10.0 / (0.2 * dist_to_projection + 1.0)
+        # return normalized_rew - collision_penalty
+
+        # Progress reward with continuous collision penalty (no threshold).
+        progress_reward = self._delta_distance_travelled * 10.0
+        return progress_reward - collision_penalty
     
     def _perform_waypoint_trace(self, location: Optional[np.ndarray] = None) -> None:
         if location is None:
