@@ -128,7 +128,7 @@ class RoarRLSimEnv(RoarRLEnv):
         # Reward forward progress along the track
         progress_reward = self.progress_scale * self._delta_distance_travelled
 
-        # Component 2: Time penalty (CRITICAL FIX)
+        # Component 2: Time penalty
         # Makes standing still costly, prevents "wait out the clock" strategy
         time_penalty_reward = -self.time_penalty
 

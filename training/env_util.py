@@ -17,6 +17,10 @@ LOCAL_VELOCITY_MAX = np.array([50.0, 15.0, 10.0], dtype=np.float32)
 # Gyroscope (rad/s) - [roll_rate, pitch_rate, yaw_rate]
 GYROSCOPE_MAX = np.array([np.pi, np.pi, np.pi], dtype=np.float32)
 
+# Accelerometer (m/s^2) - [x, y, z] in local frame
+# Max ~2g for aggressive driving (braking, cornering)
+ACCELEROMETER_MAX = np.array([20.0, 20.0, 20.0], dtype=np.float32)
+
 # Waypoints
 WAYPOINT_X_MARGIN = 1.5  # multiply by waypoint distance for x normalization
 WAYPOINT_Y_MAX = 20.0  # meters
@@ -121,6 +125,7 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
     This wrapper normalizes:
     - local_velocimeter: divided by LOCAL_VELOCITY_MAX, clipped to [-1, 1]
     - gyroscope: divided by GYROSCOPE_MAX, clipped to [-1, 1]
+    - accelerometer: divided by ACCELEROMETER_MAX, clipped to [-1, 1]
     - waypoints_information: each waypoint's [x, y, yaw, lane_width] normalized
       - x: forward distance to waypoint in vehicle frame (positive = ahead)
       - y: lateral distance to waypoint in vehicle frame (perpendicular to forward)
@@ -165,6 +170,12 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
                 low=-1.0, high=1.0, shape=(3,), dtype=np.float32
             )
 
+        # accelerometer: normalized to [-1, 1]
+        if "accelerometer" in base_space.spaces:
+            spaces["accelerometer"] = gym.spaces.Box(
+                low=-1.0, high=1.0, shape=(3,), dtype=np.float32
+            )
+
         # lidar: already normalized to [0, 1], pass through
         if "lidar" in base_space.spaces:
             spaces["lidar"] = base_space.spaces["lidar"]
@@ -202,6 +213,11 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
         if "gyroscope" in observation:
             gyro = np.asarray(observation["gyroscope"], dtype=np.float32)
             obs["gyroscope"] = np.clip(gyro / GYROSCOPE_MAX, -1.0, 1.0)
+
+        # Normalize accelerometer
+        if "accelerometer" in observation:
+            accel = np.asarray(observation["accelerometer"], dtype=np.float32)
+            obs["accelerometer"] = np.clip(accel / ACCELEROMETER_MAX, -1.0, 1.0)
 
         # Pass through lidar (already normalized)
         if "lidar" in observation:
@@ -350,6 +366,7 @@ async def initialize_roar_env(
     location_sensor = vehicle.attach_location_in_world_sensor("location")
     rpy_sensor = vehicle.attach_roll_pitch_yaw_sensor("roll_pitch_yaw")
     gyroscope_sensor = vehicle.attach_gyroscope_sensor("gyroscope")
+    accelerometer_sensor = vehicle.attach_accelerometer_sensor("accelerometer")
     if control_timestep > 0:
         # Scale points_per_second with num_lidar_beams (was 20 for 20 beams)
         lidar_points_per_second = max(1, int(round((1.0 / control_timestep) * num_lidar_beams)))
@@ -406,6 +423,6 @@ async def initialize_roar_env(
     env = SimplifyCarlaActionFilter(env)
     env = LidarObservationWrapper(env, lidar_key="lidar", num_beams=num_lidar_beams, max_distance=lidar_max_distance)
     env = PreviousActionWrapper(env)
-    env = gym.wrappers.FilterObservation(env, ["gyroscope", "waypoints_information", "local_velocimeter", "lidar", "previous_action"])
+    env = gym.wrappers.FilterObservation(env, ["gyroscope", "accelerometer", "waypoints_information", "local_velocimeter", "lidar", "previous_action"])
     env = NormalizeObservationWrapper(env)
     return env
