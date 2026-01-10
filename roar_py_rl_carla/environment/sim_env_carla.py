@@ -18,6 +18,38 @@ class FlattenActionWrapper(gym.ActionWrapper):
         return gym.spaces.unflatten(self.env.action_space, action)
     
 class RoarRLCarlaSimEnv(RoarRLSimEnv):
+    def __init__(
+        self,
+        actor,
+        manuverable_waypoints,
+        location_sensor,
+        roll_pitch_yaw_sensor,
+        velocimeter_sensor,
+        collision_sensor,
+        collision_threshold: float = 30.0,
+        waypoint_information_distances=set([]),
+        world=None,
+        render_mode="rgb_array",
+        progress_scale: float = 1.0,
+        time_penalty: float = 0.1,
+        speed_bonus_scale: float = 0.0,
+    ):
+        super().__init__(
+            actor,
+            manuverable_waypoints,
+            location_sensor,
+            roll_pitch_yaw_sensor,
+            velocimeter_sensor,
+            collision_sensor,
+            collision_threshold=collision_threshold,
+            waypoint_information_distances=waypoint_information_distances,
+            world=world,
+            render_mode=render_mode,
+            progress_scale=progress_scale,
+            time_penalty=time_penalty,
+            speed_bonus_scale=speed_bonus_scale,
+        )
+
     def reset_vehicle(self) -> None:
         # assert isinstance(self.roar_py_actor, RoarPyCarlaVehicle)
         # assert isinstance(self.roar_py_world, RoarPyCarlaWorld)

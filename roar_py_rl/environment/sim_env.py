@@ -44,7 +44,10 @@ class RoarRLSimEnv(RoarRLEnv):
             collision_threshold : float = 30.0,
             waypoint_information_distances : Set[float] = set([]),
             world: Optional[RoarPyWorld] = None,
-            render_mode="rgb_array"
+            render_mode="rgb_array",
+            progress_scale: float = 1.0,
+            time_penalty: float = 0.1,
+            speed_bonus_scale: float = 0.0,
         ) -> None:
         super().__init__(actor, manuverable_waypoints, world, render_mode)
         self.location_sensor = location_sensor
@@ -53,7 +56,12 @@ class RoarRLSimEnv(RoarRLEnv):
         self.collision_sensor = collision_sensor
         self.collision_threshold = collision_threshold
         self.waypoint_information_distances = waypoint_information_distances
-        
+
+        # Reward parameters
+        self.progress_scale = progress_scale
+        self.time_penalty = time_penalty
+        self.speed_bonus_scale = speed_bonus_scale
+
         self.waypoints_tracer = RoarPyWaypointsTracker(manuverable_waypoints)
         self._traced_projection : RoarPyWaypointsProjection = RoarPyWaypointsProjection(0,0.0)
         self._delta_distance_travelled = 0.0
@@ -107,26 +115,41 @@ class RoarRLSimEnv(RoarRLEnv):
         ]
 
     def get_reward(self, observation : Any, action : Any, info_dict : Dict[str, Any]) -> SupportsFloat:
+        # Check for collision -> terminate with zero reward
+        # Loss of future rewards IS the punishment, no explicit penalty needed
         collision_impulse : np.ndarray = self.collision_sensor.get_last_gym_observation()
         collision_impulse_norm = np.linalg.norm(collision_impulse)
-        
-        
-        collision_penalty = collision_impulse_norm / 10.0
 
-        # Previous centerline-shaped reward (kept for reference):
-        # if collision_impulse_norm > self.collision_threshold:
-        #     # Proportional penalty
-        #     return -collision_penalty
-        # dist_to_projection = np.linalg.norm(self.location_sensor.get_last_gym_observation() - self._traced_projection_point.location)
-        # if self._delta_distance_travelled <= 0:
-        #     normalized_rew = self._delta_distance_travelled * 10.0 * (0.2 * dist_to_projection + 1.0)
-        # else:
-        #     normalized_rew = self._delta_distance_travelled * 10.0 / (0.2 * dist_to_projection + 1.0)
-        # return normalized_rew - collision_penalty
+        if collision_impulse_norm > self.collision_threshold:
+            # No explicit penalty - episode termination is the punishment
+            return 0.0
 
-        # Progress reward with continuous collision penalty (no threshold).
-        progress_reward = self._delta_distance_travelled * 10.0
-        return progress_reward - collision_penalty
+        # Component 1: Progress reward
+        # Reward forward progress along the track
+        progress_reward = self.progress_scale * self._delta_distance_travelled
+
+        # Component 2: Time penalty (CRITICAL FIX)
+        # Makes standing still costly, prevents "wait out the clock" strategy
+        time_penalty_reward = -self.time_penalty
+
+        # Component 3: Speed bonus (optional)
+        # Direct reward for going fast, off by default
+        speed_bonus_reward = 0.0
+        if self.speed_bonus_scale > 0:
+            velocity = self.velocimeter_sensor.get_last_gym_observation()
+            speed = np.linalg.norm(velocity)
+            speed_bonus_reward = self.speed_bonus_scale * speed
+
+        # Combine components
+        total_reward = progress_reward + time_penalty_reward + speed_bonus_reward
+
+        # Log components for debugging (visible in info_dict)
+        info_dict["reward_progress"] = progress_reward
+        info_dict["reward_time_penalty"] = time_penalty_reward
+        info_dict["reward_speed_bonus"] = speed_bonus_reward
+        info_dict["speed_mps"] = np.linalg.norm(self.velocimeter_sensor.get_last_gym_observation())
+
+        return total_reward
     
     def _perform_waypoint_trace(self, location: Optional[np.ndarray] = None) -> None:
         if location is None:
