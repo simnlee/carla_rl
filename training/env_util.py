@@ -23,8 +23,9 @@ WAYPOINT_Y_MAX = 20.0  # meters
 WAYPOINT_YAW_MAX = np.pi  # radians
 WAYPOINT_LANE_WIDTH_MAX = 12.0  # meters (exact value from Monza track)
 
-# Waypoint distances for x normalization
-WAYPOINT_DISTANCES = [2.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 80.0, 100.0]
+# Waypoint distances for x normalization (extended for high-speed racing)
+# Provides ~6+ seconds lookahead at racing speed (200m / 30 m/s ≈ 6.7s)
+WAYPOINT_DISTANCES = [2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 80.0, 120.0, 160.0, 200.0]
 
 class SimplifyCarlaActionFilter(gym.ActionWrapper):
     def __init__(self, env: gym.Env):
@@ -65,7 +66,7 @@ class LidarObservationWrapper(gym.ObservationWrapper):
         self,
         env: gym.Env,
         lidar_key: str = "lidar",
-        num_beams: int = 20,
+        num_beams: int = 60,
         max_distance: float = 50.0,
     ):
         super().__init__(env)
@@ -80,7 +81,7 @@ class LidarObservationWrapper(gym.ObservationWrapper):
             raise TypeError("LidarObservationWrapper expects a Dict observation space")
         spaces = base_space.spaces.copy()
         spaces.pop(self.lidar_key, None)
-        spaces["lidar_20"] = gym.spaces.Box(
+        spaces["lidar"] = gym.spaces.Box(
             low=0.0,
             high=1.0,
             shape=(self.num_beams,),
@@ -110,7 +111,7 @@ class LidarObservationWrapper(gym.ObservationWrapper):
         beams = np.clip(beams / self.max_distance, 0.0, 1.0).astype(np.float32)
         obs = dict(observation)
         obs.pop(self.lidar_key, None)
-        obs["lidar_20"] = beams
+        obs["lidar"] = beams
         return obs
 
 
@@ -125,7 +126,7 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
       - y: lateral distance to waypoint in vehicle frame (perpendicular to forward)
       - yaw: relative heading difference
       - lane_width: track width at waypoint
-    - lidar_20: already normalized by LidarObservationWrapper, passed through
+    - lidar: already normalized by LidarObservationWrapper, passed through
     """
 
     def __init__(self, env: gym.Env):
@@ -163,9 +164,9 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
                 low=-1.0, high=1.0, shape=(3,), dtype=np.float32
             )
 
-        # lidar_20: already normalized to [0, 1], pass through
-        if "lidar_20" in base_space.spaces:
-            spaces["lidar_20"] = base_space.spaces["lidar_20"]
+        # lidar: already normalized to [0, 1], pass through
+        if "lidar" in base_space.spaces:
+            spaces["lidar"] = base_space.spaces["lidar"]
 
         # waypoints_information: dict of waypoints, each normalized
         if "waypoints_information" in base_space.spaces:
@@ -197,9 +198,9 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
             gyro = np.asarray(observation["gyroscope"], dtype=np.float32)
             obs["gyroscope"] = np.clip(gyro / GYROSCOPE_MAX, -1.0, 1.0)
 
-        # Pass through lidar_20 (already normalized)
-        if "lidar_20" in observation:
-            obs["lidar_20"] = observation["lidar_20"]
+        # Pass through lidar (already normalized)
+        if "lidar" in observation:
+            obs["lidar"] = observation["lidar"]
 
         # Normalize waypoints_information
         if "waypoints_information" in observation:
@@ -219,14 +220,22 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
 
 
 async def initialize_roar_env(
-    carla_host : str = "localhost", 
-    carla_port : int = 2000, 
-    control_timestep : float = 0.05, 
+    carla_host : str = "localhost",
+    carla_port : int = 2000,
+    control_timestep : float = 0.05,
     physics_timestep : float = 0.01,
-    waypoint_information_distances : list = [2.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 80.0, 100.0],
+    waypoint_information_distances : list = [2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 80.0, 120.0, 160.0, 200.0],
     image_width : int = 400,
     image_height : int = 200,
-    enable_rendering : bool = True
+    enable_rendering : bool = True,
+    # Lidar config
+    num_lidar_beams: int = 60,
+    lidar_max_distance: float = 50.0,
+    # Reward config
+    progress_scale: float = 1.0,
+    time_penalty: float = 0.1,
+    speed_bonus_scale: float = 0.0,
+    collision_threshold: float = 1.0,
 ):
     carla_client = carla.Client(carla_host, carla_port)
     carla_client.set_timeout(15.0)
@@ -269,12 +278,12 @@ async def initialize_roar_env(
     location_sensor = vehicle.attach_location_in_world_sensor("location")
     rpy_sensor = vehicle.attach_roll_pitch_yaw_sensor("roll_pitch_yaw")
     gyroscope_sensor = vehicle.attach_gyroscope_sensor("gyroscope")
-    lidar_max_distance = 50.0
     if control_timestep > 0:
-        lidar_points_per_second = max(1, int(round((1.0 / control_timestep) * 20)))
+        # Scale points_per_second with num_lidar_beams (was 20 for 20 beams)
+        lidar_points_per_second = max(1, int(round((1.0 / control_timestep) * num_lidar_beams)))
         lidar_rotation_frequency = 1.0 / control_timestep
     else:
-        lidar_points_per_second = 20
+        lidar_points_per_second = num_lidar_beams
         lidar_rotation_frequency = 10.0
     lidar_sensor = vehicle.attach_lidar_sensor(
         np.array([0.0, 0.0, vehicle.bounding_box.extent[2] + 0.2]),
@@ -316,11 +325,14 @@ async def initialize_roar_env(
         velocimeter_sensor,
         collision_sensor,
         waypoint_information_distances=set(waypoint_information_distances),
-        world = world, 
-        collision_threshold = 1.0
+        world=world,
+        collision_threshold=collision_threshold,
+        progress_scale=progress_scale,
+        time_penalty=time_penalty,
+        speed_bonus_scale=speed_bonus_scale,
     )
     env = SimplifyCarlaActionFilter(env)
-    env = LidarObservationWrapper(env, lidar_key="lidar", num_beams=20, max_distance=lidar_max_distance)
-    env = gym.wrappers.FilterObservation(env, ["gyroscope", "waypoints_information", "local_velocimeter", "lidar_20"])
+    env = LidarObservationWrapper(env, lidar_key="lidar", num_beams=num_lidar_beams, max_distance=lidar_max_distance)
+    env = gym.wrappers.FilterObservation(env, ["gyroscope", "waypoints_information", "local_velocimeter", "lidar"])
     env = NormalizeObservationWrapper(env)
     return env
