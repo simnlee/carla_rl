@@ -132,7 +132,7 @@ RESUME_CHECKPOINT = os.getenv("RESUME_CHECKPOINT", "").strip()
 
 # SAC training parameters
 training_params = dict(
-    learning_rate=2e-5,
+    learning_rate=1e-4,
     batch_size=256,
     gamma=0.99,
     ent_coef="auto",
