@@ -130,6 +130,16 @@ PORT_STRIDE = int(os.getenv("PORT_STRIDE", "2"))
 SEED = int(os.getenv("SEED", "1"))
 RESUME_CHECKPOINT = os.getenv("RESUME_CHECKPOINT", "").strip()
 
+# Reward configuration
+PROGRESS_SCALE = float(os.getenv("PROGRESS_SCALE", "1.0"))
+TIME_PENALTY = float(os.getenv("TIME_PENALTY", "0.1"))
+SPEED_BONUS_SCALE = float(os.getenv("SPEED_BONUS_SCALE", "0.0"))
+COLLISION_THRESHOLD = float(os.getenv("COLLISION_THRESHOLD", "1.0"))
+
+# Observation configuration
+NUM_LIDAR_BEAMS = int(os.getenv("NUM_LIDAR_BEAMS", "60"))
+LIDAR_MAX_DISTANCE = float(os.getenv("LIDAR_MAX_DISTANCE", "50.0"))
+
 # SAC training parameters
 training_params = dict(
     learning_rate=1e-4,
@@ -188,7 +198,15 @@ def _create_single_env(rank: int, run_name: str, run_id: str) -> gym.Env:
             carla_port=carla_port,
             control_timestep=1.0 / RUN_FPS,
             physics_timestep=1.0 / (RUN_FPS * SUBSTEPS_PER_STEP),
-            enable_rendering=ENABLE_RENDERING
+            enable_rendering=ENABLE_RENDERING,
+            # Lidar config
+            num_lidar_beams=NUM_LIDAR_BEAMS,
+            lidar_max_distance=LIDAR_MAX_DISTANCE,
+            # Reward config
+            progress_scale=PROGRESS_SCALE,
+            time_penalty=TIME_PENALTY,
+            speed_bonus_scale=SPEED_BONUS_SCALE,
+            collision_threshold=COLLISION_THRESHOLD,
         )
     )
     env = NaNCheckWrapper(env, name=f"env_{rank}")
@@ -248,6 +266,14 @@ def main():
             "port_stride": PORT_STRIDE,
             "seed": SEED,
             "run_fps": RUN_FPS,
+            # Reward config
+            "progress_scale": PROGRESS_SCALE,
+            "time_penalty": TIME_PENALTY,
+            "speed_bonus_scale": SPEED_BONUS_SCALE,
+            "collision_threshold": COLLISION_THRESHOLD,
+            # Observation config
+            "num_lidar_beams": NUM_LIDAR_BEAMS,
+            "lidar_max_distance": LIDAR_MAX_DISTANCE,
         }
     )
 

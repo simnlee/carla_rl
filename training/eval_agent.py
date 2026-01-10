@@ -42,6 +42,16 @@ PROJECT_NAME = os.getenv("PROJECT_NAME", "ROAR_PY_RL")
 RUN_NAME = os.getenv("RUN_NAME", "Denser_Waypoints_And_Collision_Detection")
 ENABLE_RENDERING = os.getenv("ENABLE_RENDERING", "true") == "true"
 SEED = int(os.getenv("SEED", "1"))
+
+# Reward configuration (must match training)
+PROGRESS_SCALE = float(os.getenv("PROGRESS_SCALE", "1.0"))
+TIME_PENALTY = float(os.getenv("TIME_PENALTY", "0.1"))
+SPEED_BONUS_SCALE = float(os.getenv("SPEED_BONUS_SCALE", "0.0"))
+COLLISION_THRESHOLD = float(os.getenv("COLLISION_THRESHOLD", "1.0"))
+
+# Observation configuration (must match training)
+NUM_LIDAR_BEAMS = int(os.getenv("NUM_LIDAR_BEAMS", "60"))
+LIDAR_MAX_DISTANCE = float(os.getenv("LIDAR_MAX_DISTANCE", "50.0"))
 training_params = dict(
     learning_rate = 1e-5,  # be smaller 2.5e-4
     #n_steps = 256 * RUN_FPS, #1024
@@ -85,11 +95,19 @@ def find_latest_model(root_path: Path) -> Optional[Path]:
 
 def get_env(wandb_run, video_dir: Path) -> gym.Env:
     env = asyncio.run(initialize_roar_env(
-        control_timestep=1.0/RUN_FPS, 
+        control_timestep=1.0/RUN_FPS,
         physics_timestep=1.0/(RUN_FPS*SUBSTEPS_PER_STEP),
         image_width=1920,
         image_height=1080,
         enable_rendering=ENABLE_RENDERING,
+        # Lidar config (must match training)
+        num_lidar_beams=NUM_LIDAR_BEAMS,
+        lidar_max_distance=LIDAR_MAX_DISTANCE,
+        # Reward config (must match training)
+        progress_scale=PROGRESS_SCALE,
+        time_penalty=TIME_PENALTY,
+        speed_bonus_scale=SPEED_BONUS_SCALE,
+        collision_threshold=COLLISION_THRESHOLD,
     ))
     env = gym.wrappers.FlattenObservation(env)
     env = FlattenActionWrapper(env)
