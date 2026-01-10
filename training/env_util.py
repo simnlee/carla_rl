@@ -127,6 +127,7 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
       - yaw: relative heading difference
       - lane_width: track width at waypoint
     - lidar: already normalized by LidarObservationWrapper, passed through
+    - previous_action: already in [-1, 1] range, passed through
     """
 
     def __init__(self, env: gym.Env):
@@ -168,6 +169,10 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
         if "lidar" in base_space.spaces:
             spaces["lidar"] = base_space.spaces["lidar"]
 
+        # previous_action: already in [-1, 1], pass through
+        if "previous_action" in base_space.spaces:
+            spaces["previous_action"] = base_space.spaces["previous_action"]
+
         # waypoints_information: dict of waypoints, each normalized
         if "waypoints_information" in base_space.spaces:
             wp_base = base_space.spaces["waypoints_information"]
@@ -202,6 +207,10 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
         if "lidar" in observation:
             obs["lidar"] = observation["lidar"]
 
+        # Pass through previous_action (already in [-1, 1])
+        if "previous_action" in observation:
+            obs["previous_action"] = observation["previous_action"]
+
         # Normalize waypoints_information
         if "waypoints_information" in observation:
             wp_obs = {}
@@ -217,6 +226,69 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
             obs["waypoints_information"] = wp_obs
 
         return obs
+
+
+class PreviousActionWrapper(gym.Wrapper):
+    """
+    Adds the previous action to the observation space.
+
+    This helps the agent reason about momentum and enables smoother control,
+    similar to GT Sophy's "action feedback" observation.
+    """
+
+    def __init__(self, env: gym.Env):
+        super().__init__(env)
+
+        # Get the action space shape (should be 2: throttle, steer after SimplifyCarlaActionFilter)
+        # After FlattenActionWrapper, action is a flat array
+        if isinstance(env.action_space, gym.spaces.Box):
+            self.action_shape = env.action_space.shape
+        else:
+            # For Dict action space, we'll store throttle and steer
+            self.action_shape = (2,)
+
+        self._previous_action = np.zeros(self.action_shape, dtype=np.float32)
+
+        # Modify observation space to include previous action
+        base_obs_space = env.observation_space
+        if isinstance(base_obs_space, gym.spaces.Dict):
+            spaces = dict(base_obs_space.spaces)
+            spaces["previous_action"] = gym.spaces.Box(
+                low=-1.0,
+                high=1.0,
+                shape=self.action_shape,
+                dtype=np.float32
+            )
+            self.observation_space = gym.spaces.Dict(spaces)
+        else:
+            # Handle Box observation space (after flattening)
+            raise TypeError("PreviousActionWrapper expects Dict observation space. Apply before FlattenObservation.")
+
+    def _add_previous_action(self, obs):
+        if isinstance(obs, dict):
+            obs = dict(obs)  # Copy to avoid mutating original
+            obs["previous_action"] = self._previous_action.copy()
+        return obs
+
+    def reset(self, **kwargs):
+        self._previous_action = np.zeros(self.action_shape, dtype=np.float32)
+        obs, info = self.env.reset(**kwargs)
+        return self._add_previous_action(obs), info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+
+        # Store action for next step
+        # Handle both dict and array actions
+        if isinstance(action, dict):
+            self._previous_action = np.array([
+                action.get("throttle", 0.0),
+                action.get("steer", 0.0)
+            ], dtype=np.float32).flatten()
+        else:
+            self._previous_action = np.array(action, dtype=np.float32).flatten()
+
+        return self._add_previous_action(obs), reward, terminated, truncated, info
 
 
 async def initialize_roar_env(
@@ -333,6 +405,7 @@ async def initialize_roar_env(
     )
     env = SimplifyCarlaActionFilter(env)
     env = LidarObservationWrapper(env, lidar_key="lidar", num_beams=num_lidar_beams, max_distance=lidar_max_distance)
-    env = gym.wrappers.FilterObservation(env, ["gyroscope", "waypoints_information", "local_velocimeter", "lidar"])
+    env = PreviousActionWrapper(env)
+    env = gym.wrappers.FilterObservation(env, ["gyroscope", "waypoints_information", "local_velocimeter", "lidar", "previous_action"])
     env = NormalizeObservationWrapper(env)
     return env
