@@ -144,8 +144,8 @@ LIDAR_MAX_DISTANCE = float(os.getenv("LIDAR_MAX_DISTANCE", "50.0"))
 # SAC training parameters
 training_params = dict(
     learning_rate=1e-4,
-    batch_size=256,
-    gamma=0.99,
+    batch_size=512,
+    gamma=0.995,
     ent_coef="auto",
     target_entropy="auto",
     use_sde=True,
@@ -154,9 +154,11 @@ training_params = dict(
     verbose=1,
     seed=SEED,
     device=th.device("cuda" if th.cuda.is_available() else "cpu"),
-    # Multi-env adjustments: scale gradient_steps and learning_starts by N_ENVS
-    gradient_steps=N_ENVS,  # Do N gradient updates per env.step() call
-    learning_starts=100 * N_ENVS,  # Scale warmup by number of envs
+    gradient_steps=4,
+    learning_starts=10000,
+    policy_kwargs=dict(
+        net_arch=[512, 512, 256],
+    ),
 )
 
 def find_latest_model(root_path: Path) -> Optional[Path]:
@@ -277,6 +279,13 @@ def main():
             # Observation config
             "num_lidar_beams": NUM_LIDAR_BEAMS,
             "lidar_max_distance": LIDAR_MAX_DISTANCE,
+            # Training hyperparameters
+            "learning_rate": training_params["learning_rate"],
+            "batch_size": training_params["batch_size"],
+            "gamma": training_params["gamma"],
+            "gradient_steps": training_params["gradient_steps"],
+            "learning_starts": training_params["learning_starts"],
+            "net_arch": training_params["policy_kwargs"]["net_arch"],
         }
     )
 
