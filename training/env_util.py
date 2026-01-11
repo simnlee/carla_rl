@@ -11,8 +11,8 @@ import carla
 # =============================================================================
 
 # Velocity (m/s) - [forward, lateral, vertical]
-# 50 m/s comes from CARLA ros-bridge default max speed for cars (180 km/h)
-LOCAL_VELOCITY_MAX = np.array([50.0, 15.0, 10.0], dtype=np.float32)
+# Forward max updated for higher top speed; lateral/vertical remain conservative.
+LOCAL_VELOCITY_MAX = np.array([90.0, 15.0, 10.0], dtype=np.float32)
 
 # Gyroscope (rad/s) - [roll_rate, pitch_rate, yaw_rate]
 GYROSCOPE_MAX = np.array([np.pi, np.pi, np.pi], dtype=np.float32)
@@ -244,6 +244,35 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
         return obs
 
 
+class LocalAccelerometerWrapper(gym.ObservationWrapper):
+    """Converts accelerometer from world to local coordinates using roll/pitch/yaw."""
+
+    def observation(self, observation: Dict[str, Any]) -> Dict[str, Any]:
+        if "accelerometer" not in observation or "roll_pitch_yaw" not in observation:
+            return observation
+
+        accel_world = np.asarray(observation["accelerometer"], dtype=np.float32)
+        roll_pitch_yaw = np.asarray(observation["roll_pitch_yaw"], dtype=np.float32)
+        if accel_world.shape != (3,) or roll_pitch_yaw.shape != (3,):
+            return observation
+
+        roll, pitch, yaw = roll_pitch_yaw
+        cr, sr = np.cos(roll), np.sin(roll)
+        cp, sp = np.cos(pitch), np.sin(pitch)
+        cy, sy = np.cos(yaw), np.sin(yaw)
+        # Rotation from local to world (Z-Y-X / yaw-pitch-roll).
+        rotation = np.array([
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp,     cp * sr,               cp * cr],
+        ], dtype=np.float32)
+        accel_local = rotation.T @ accel_world
+
+        obs = dict(observation)
+        obs["accelerometer"] = accel_local
+        return obs
+
+
 class PreviousActionWrapper(gym.Wrapper):
     """
     Adds the previous action to the observation space.
@@ -361,7 +390,6 @@ async def initialize_roar_env(
     assert collision_sensor is not None, "Failed to attach collision sensor"
     
     #TODO: Attach next waypoint to observation
-    velocimeter_sensor = vehicle.attach_velocimeter_sensor("velocimeter")
     local_velocimeter_sensor = vehicle.attach_local_velocimeter_sensor("local_velocimeter")
 
     location_sensor = vehicle.attach_location_in_world_sensor("location")
@@ -412,7 +440,7 @@ async def initialize_roar_env(
         world.maneuverable_waypoints,
         location_sensor,
         rpy_sensor,
-        velocimeter_sensor,
+        local_velocimeter_sensor,
         collision_sensor,
         waypoint_information_distances=set(waypoint_information_distances),
         world=world,
@@ -425,6 +453,7 @@ async def initialize_roar_env(
     env = SimplifyCarlaActionFilter(env)
     env = LidarObservationWrapper(env, lidar_key="lidar", num_beams=num_lidar_beams, max_distance=lidar_max_distance)
     env = PreviousActionWrapper(env)
+    env = LocalAccelerometerWrapper(env)
     env = gym.wrappers.FilterObservation(env, ["gyroscope", "accelerometer", "waypoints_information", "local_velocimeter", "lidar", "previous_action"])
     env = NormalizeObservationWrapper(env)
     return env

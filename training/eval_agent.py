@@ -53,23 +53,6 @@ WALL_PENALTY_SCALE = float(os.getenv("WALL_PENALTY_SCALE", "0.01"))
 # Observation configuration (must match training)
 NUM_LIDAR_BEAMS = int(os.getenv("NUM_LIDAR_BEAMS", "60"))
 LIDAR_MAX_DISTANCE = float(os.getenv("LIDAR_MAX_DISTANCE", "50.0"))
-training_params = dict(
-    learning_rate=1e-4,
-    batch_size=512,
-    gamma=0.995,
-    ent_coef="auto",
-    target_entropy="auto",
-    use_sde=True,
-    sde_sample_freq=RUN_FPS * 2,
-    verbose=1,
-    seed=SEED,
-    device=th.device("cuda" if th.cuda.is_available() else "cpu"),
-    gradient_steps=4,
-    learning_starts=10000,
-    policy_kwargs=dict(
-        net_arch=[512, 512, 256],
-    ),
-)
 
 def find_latest_model(root_path: Path) -> Optional[Path]:
     """
@@ -150,12 +133,12 @@ def main():
     else:
         # Load the model
         print(f"reloading from {type(latest_model_path)} {latest_model_path}\n\n\n\n")
-        model = SAC.load( 
+        model = SAC.load(
             latest_model_path,
             env=env,
+            device=th.device("cuda" if th.cuda.is_available() else "cpu"),
             # optimize_memory_usage=True,
             # replay_buffer_kwargs={"handle_timeout_termination": False}
-            **training_params
         )
 
     obs, info = env.reset()
