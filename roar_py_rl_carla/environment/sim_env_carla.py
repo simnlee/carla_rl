@@ -33,6 +33,7 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
         progress_scale: float = 1.0,
         time_penalty: float = 0.1,
         speed_bonus_scale: float = 0.0,
+        wall_penalty_scale: float = 0.01,
     ):
         super().__init__(
             actor,
@@ -48,6 +49,7 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
             progress_scale=progress_scale,
             time_penalty=time_penalty,
             speed_bonus_scale=speed_bonus_scale,
+            wall_penalty_scale=wall_penalty_scale,
         )
 
     def reset_vehicle(self) -> None:

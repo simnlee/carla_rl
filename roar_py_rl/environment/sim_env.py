@@ -48,6 +48,7 @@ class RoarRLSimEnv(RoarRLEnv):
             progress_scale: float = 1.0,
             time_penalty: float = 0.1,
             speed_bonus_scale: float = 0.0,
+            wall_penalty_scale: float = 0.01,
         ) -> None:
         super().__init__(actor, manuverable_waypoints, world, render_mode)
         self.location_sensor = location_sensor
@@ -61,6 +62,7 @@ class RoarRLSimEnv(RoarRLEnv):
         self.progress_scale = progress_scale
         self.time_penalty = time_penalty
         self.speed_bonus_scale = speed_bonus_scale
+        self.wall_penalty_scale = wall_penalty_scale
 
         self.waypoints_tracer = RoarPyWaypointsTracker(manuverable_waypoints)
         self._traced_projection : RoarPyWaypointsProjection = RoarPyWaypointsProjection(0,0.0)
@@ -115,14 +117,9 @@ class RoarRLSimEnv(RoarRLEnv):
         ]
 
     def get_reward(self, observation : Any, action : Any, info_dict : Dict[str, Any]) -> SupportsFloat:
-        # Check for collision -> terminate with zero reward
-        # Loss of future rewards IS the punishment, no explicit penalty needed
+        # Get collision data for potential penalty
         collision_impulse : np.ndarray = self.collision_sensor.get_last_gym_observation()
         collision_impulse_norm = np.linalg.norm(collision_impulse)
-
-        if collision_impulse_norm > self.collision_threshold:
-            # No explicit penalty - episode termination is the punishment
-            return 0.0
 
         # Component 1: Progress reward
         # Reward forward progress along the track
@@ -140,13 +137,22 @@ class RoarRLSimEnv(RoarRLEnv):
             speed = np.linalg.norm(velocity)
             speed_bonus_reward = self.speed_bonus_scale * speed
 
+        # Component 4: Collision penalty
+        collision_reward = 0.0
+        if collision_impulse_norm > self.collision_threshold:
+            velocity = self.velocimeter_sensor.get_last_gym_observation()
+            speed = np.linalg.norm(velocity)
+            collision_reward = -self.wall_penalty_scale * (speed ** 2)
+            info_dict["collision_speed_mps"] = speed
+
         # Combine components
-        total_reward = progress_reward + time_penalty_reward + speed_bonus_reward
+        total_reward = progress_reward + time_penalty_reward + speed_bonus_reward + collision_reward
 
         # Log components for debugging (visible in info_dict)
         info_dict["reward_progress"] = progress_reward
         info_dict["reward_time_penalty"] = time_penalty_reward
         info_dict["reward_speed_bonus"] = speed_bonus_reward
+        info_dict["reward_collision"] = collision_reward
         info_dict["speed_mps"] = np.linalg.norm(self.velocimeter_sensor.get_last_gym_observation())
 
         return total_reward

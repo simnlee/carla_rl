@@ -324,6 +324,7 @@ async def initialize_roar_env(
     time_penalty: float = 0.1,
     speed_bonus_scale: float = 0.0,
     collision_threshold: float = 1.0,
+    wall_penalty_scale: float = 0.01,
 ):
     carla_client = carla.Client(carla_host, carla_port)
     carla_client.set_timeout(15.0)
@@ -419,6 +420,7 @@ async def initialize_roar_env(
         progress_scale=progress_scale,
         time_penalty=time_penalty,
         speed_bonus_scale=speed_bonus_scale,
+        wall_penalty_scale=wall_penalty_scale,
     )
     env = SimplifyCarlaActionFilter(env)
     env = LidarObservationWrapper(env, lidar_key="lidar", num_beams=num_lidar_beams, max_distance=lidar_max_distance)
