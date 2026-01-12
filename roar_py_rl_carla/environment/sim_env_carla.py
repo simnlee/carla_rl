@@ -34,6 +34,9 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
         time_penalty: float = 0.1,
         speed_bonus_scale: float = 0.0,
         wall_penalty_scale: float = 0.01,
+        accelerometer_sensor=None,
+        slip_penalty_scale: float = 0.01,
+        slip_threshold: float = 8.0,
     ):
         super().__init__(
             actor,
@@ -50,6 +53,9 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
             time_penalty=time_penalty,
             speed_bonus_scale=speed_bonus_scale,
             wall_penalty_scale=wall_penalty_scale,
+            accelerometer_sensor=accelerometer_sensor,
+            slip_penalty_scale=slip_penalty_scale,
+            slip_threshold=slip_threshold,
         )
 
     def reset_vehicle(self) -> None:

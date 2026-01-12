@@ -1,5 +1,5 @@
 from typing import List, Optional
-from roar_py_interface import RoarPyActor, RoarPySensor, RoarPyWaypoint, RoarPyWorld, RoarPyLocationInWorldSensor, RoarPyCollisionSensor, RoarPyVelocimeterSensor, RoarPyRollPitchYawSensor, RoarPyWaypointsTracker, RoarPyWaypointsProjection
+from roar_py_interface import RoarPyActor, RoarPySensor, RoarPyWaypoint, RoarPyWorld, RoarPyLocationInWorldSensor, RoarPyCollisionSensor, RoarPyVelocimeterSensor, RoarPyRollPitchYawSensor, RoarPyAccelerometerSensor, RoarPyWaypointsTracker, RoarPyWaypointsProjection
 from .base_env import RoarRLEnv
 from typing import Any, Dict, SupportsFloat, Tuple, Optional, Set
 import gymnasium as gym
@@ -49,6 +49,9 @@ class RoarRLSimEnv(RoarRLEnv):
             time_penalty: float = 0.1,
             speed_bonus_scale: float = 0.0,
             wall_penalty_scale: float = 0.01,
+            accelerometer_sensor: Optional[RoarPyAccelerometerSensor] = None,
+            slip_penalty_scale: float = 0.01,
+            slip_threshold: float = 8.0,
         ) -> None:
         super().__init__(actor, manuverable_waypoints, world, render_mode)
         self.location_sensor = location_sensor
@@ -63,6 +66,11 @@ class RoarRLSimEnv(RoarRLEnv):
         self.time_penalty = time_penalty
         self.speed_bonus_scale = speed_bonus_scale
         self.wall_penalty_scale = wall_penalty_scale
+
+        # Slip penalty parameters (GT Sophy-style)
+        self.accelerometer_sensor = accelerometer_sensor
+        self.slip_penalty_scale = slip_penalty_scale
+        self.slip_threshold = slip_threshold
 
         self.waypoints_tracer = RoarPyWaypointsTracker(manuverable_waypoints)
         self._traced_projection : RoarPyWaypointsProjection = RoarPyWaypointsProjection(0,0.0)
@@ -110,9 +118,11 @@ class RoarRLSimEnv(RoarRLEnv):
 
     @property
     def sensors_to_update(self) -> List[RoarPySensor]:
+        sensors = [self.location_sensor, self.roll_pitch_yaw_sensor, self.local_velocimeter_sensor, self.collision_sensor]
+        if self.accelerometer_sensor is not None:
+            sensors.append(self.accelerometer_sensor)
         return [
-            sensor for sensor in
-            [self.location_sensor, self.roll_pitch_yaw_sensor, self.local_velocimeter_sensor, self.collision_sensor]
+            sensor for sensor in sensors
             if sensor not in self.roar_py_actor.get_sensors()
         ]
 
@@ -137,7 +147,8 @@ class RoarRLSimEnv(RoarRLEnv):
             speed = np.linalg.norm(velocity)
             speed_bonus_reward = self.speed_bonus_scale * speed
 
-        # Component 4: Collision penalty
+        # Component 4: Collision penalty (per-timestep while in contact)
+        # GT Sophy style: no termination, continuous penalty while scraping wall
         collision_reward = 0.0
         if collision_impulse_norm > self.collision_threshold:
             velocity = self.local_velocimeter_sensor.get_last_gym_observation()
@@ -145,8 +156,41 @@ class RoarRLSimEnv(RoarRLEnv):
             collision_reward = -self.wall_penalty_scale * (speed ** 2)
             info_dict["collision_speed_mps"] = speed
 
+        # Component 5: Slip penalty (lateral acceleration proxy)
+        # Penalizes high lateral acceleration indicating tire slip / loss of grip
+        slip_penalty = 0.0
+        if self.accelerometer_sensor is not None:
+            accel_world = self.accelerometer_sensor.get_last_gym_observation()
+
+            # Convert world-frame acceleration to local-frame using vehicle orientation
+            roll_pitch_yaw = self.roll_pitch_yaw_sensor.get_last_gym_observation()
+            roll, pitch, yaw = roll_pitch_yaw
+            cr, sr = np.cos(roll), np.sin(roll)
+            cp, sp = np.cos(pitch), np.sin(pitch)
+            cy, sy = np.cos(yaw), np.sin(yaw)
+            # Rotation matrix from local to world (Z-Y-X / yaw-pitch-roll)
+            # We need the transpose to go from world to local
+            rotation = np.array([
+                [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+                [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+                [-sp,     cp * sr,                cp * cr],
+            ], dtype=np.float32)
+            accel_local = rotation.T @ accel_world
+
+            # In local frame: [forward, lateral, vertical]
+            # Lateral acceleration (y component) indicates sideways force / tire slip
+            lateral_accel = abs(accel_local[1])
+
+            # Only penalize above threshold (normal cornering is fine)
+            if lateral_accel > self.slip_threshold:
+                excess = lateral_accel - self.slip_threshold
+                slip_penalty = -self.slip_penalty_scale * (excess ** 2)
+
+            info_dict["lateral_accel_mps2"] = lateral_accel
+            info_dict["reward_slip_penalty"] = slip_penalty
+
         # Combine components
-        total_reward = progress_reward + time_penalty_reward + speed_bonus_reward + collision_reward
+        total_reward = progress_reward + time_penalty_reward + speed_bonus_reward + collision_reward + slip_penalty
 
         # Log components for debugging (visible in info_dict)
         info_dict["reward_progress"] = progress_reward
@@ -173,14 +217,7 @@ class RoarRLSimEnv(RoarRLEnv):
         self._delta_distance_travelled = 0.0
 
     def is_terminated(self, observation : Any, action : Any, info_dict : Dict[str, Any]) -> bool:
-        collision_impulse : np.ndarray = self.collision_sensor.get_last_gym_observation()
-        collision_impulse_norm = np.linalg.norm(collision_impulse)
-        if collision_impulse_norm > 0:
-            print(f"Collision detected with impulse {collision_impulse_norm}", self.collision_sensor.get_last_observation().impulse_normal)
-        if collision_impulse_norm > self.collision_threshold:
-            print("Terminated due to collision")
-            return True
-        
+        # Termination is handled by the TimeLimit wrapper only.
         return False
 
     def is_truncated(self, observation : Any, action : Any, info_dict : Dict[str, Any]) -> bool:
