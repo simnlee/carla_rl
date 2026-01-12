@@ -141,6 +141,10 @@ WALL_PENALTY_SCALE = float(os.getenv("WALL_PENALTY_SCALE", "0.01"))
 SLIP_PENALTY_SCALE = float(os.getenv("SLIP_PENALTY_SCALE", "0.01"))
 SLIP_THRESHOLD = float(os.getenv("SLIP_THRESHOLD", "8.0"))
 
+# Minimum speed penalty configuration
+MIN_SPEED_THRESHOLD = float(os.getenv("MIN_SPEED_THRESHOLD", "15.0"))
+MIN_SPEED_PENALTY_SCALE = float(os.getenv("MIN_SPEED_PENALTY_SCALE", "0.1"))
+
 # Observation configuration
 NUM_LIDAR_BEAMS = int(os.getenv("NUM_LIDAR_BEAMS", "60"))
 LIDAR_MAX_DISTANCE = float(os.getenv("LIDAR_MAX_DISTANCE", "50.0"))
@@ -162,6 +166,7 @@ training_params = dict(
     learning_starts=10000,
     policy_kwargs=dict(
         net_arch=[512, 512, 256],
+        use_sde=True,
     ),
 )
 
@@ -218,6 +223,9 @@ def _create_single_env(rank: int, run_name: str, run_id: str) -> gym.Env:
             # Slip penalty config
             slip_penalty_scale=SLIP_PENALTY_SCALE,
             slip_threshold=SLIP_THRESHOLD,
+            # Minimum speed penalty config
+            min_speed_threshold=MIN_SPEED_THRESHOLD,
+            min_speed_penalty_scale=MIN_SPEED_PENALTY_SCALE,
         )
     )
     env = NaNCheckWrapper(env, name=f"env_{rank}")
@@ -286,6 +294,9 @@ def main():
             # Slip penalty config
             "slip_penalty_scale": SLIP_PENALTY_SCALE,
             "slip_threshold": SLIP_THRESHOLD,
+            # Minimum speed penalty config
+            "min_speed_threshold": MIN_SPEED_THRESHOLD,
+            "min_speed_penalty_scale": MIN_SPEED_PENALTY_SCALE,
             # Observation config
             "num_lidar_beams": NUM_LIDAR_BEAMS,
             "lidar_max_distance": LIDAR_MAX_DISTANCE,
@@ -293,6 +304,7 @@ def main():
             "learning_rate": training_params["learning_rate"],
             "batch_size": training_params["batch_size"],
             "gamma": training_params["gamma"],
+            "ent_coef": training_params["ent_coef"],
             "gradient_steps": training_params["gradient_steps"],
             "learning_starts": training_params["learning_starts"],
             "net_arch": training_params["policy_kwargs"]["net_arch"],

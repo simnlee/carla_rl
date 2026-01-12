@@ -357,6 +357,9 @@ async def initialize_roar_env(
     # Slip penalty config (GT Sophy-style)
     slip_penalty_scale: float = 0.01,
     slip_threshold: float = 8.0,
+    # Minimum speed penalty config
+    min_speed_threshold: float = 15.0,
+    min_speed_penalty_scale: float = 0.1,
 ):
     carla_client = carla.Client(carla_host, carla_port)
     carla_client.set_timeout(15.0)
@@ -455,6 +458,8 @@ async def initialize_roar_env(
         accelerometer_sensor=accelerometer_sensor,
         slip_penalty_scale=slip_penalty_scale,
         slip_threshold=slip_threshold,
+        min_speed_threshold=min_speed_threshold,
+        min_speed_penalty_scale=min_speed_penalty_scale,
     )
     env = SimplifyCarlaActionFilter(env)
     env = LidarObservationWrapper(env, lidar_key="lidar", num_beams=num_lidar_beams, max_distance=lidar_max_distance)

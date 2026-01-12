@@ -54,6 +54,10 @@ WALL_PENALTY_SCALE = float(os.getenv("WALL_PENALTY_SCALE", "0.01"))
 SLIP_PENALTY_SCALE = float(os.getenv("SLIP_PENALTY_SCALE", "0.01"))
 SLIP_THRESHOLD = float(os.getenv("SLIP_THRESHOLD", "8.0"))
 
+# Minimum speed penalty configuration (must match training)
+MIN_SPEED_THRESHOLD = float(os.getenv("MIN_SPEED_THRESHOLD", "15.0"))
+MIN_SPEED_PENALTY_SCALE = float(os.getenv("MIN_SPEED_PENALTY_SCALE", "0.1"))
+
 # Observation configuration (must match training)
 NUM_LIDAR_BEAMS = int(os.getenv("NUM_LIDAR_BEAMS", "60"))
 LIDAR_MAX_DISTANCE = float(os.getenv("LIDAR_MAX_DISTANCE", "50.0"))
@@ -94,6 +98,9 @@ def get_env(wandb_run, video_dir: Path) -> gym.Env:
         # Slip penalty config (must match training)
         slip_penalty_scale=SLIP_PENALTY_SCALE,
         slip_threshold=SLIP_THRESHOLD,
+        # Minimum speed penalty config (must match training)
+        min_speed_threshold=MIN_SPEED_THRESHOLD,
+        min_speed_penalty_scale=MIN_SPEED_PENALTY_SCALE,
     ))
     env = gym.wrappers.FlattenObservation(env)
     env = FlattenActionWrapper(env)

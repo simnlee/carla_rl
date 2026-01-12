@@ -52,6 +52,8 @@ class RoarRLSimEnv(RoarRLEnv):
             accelerometer_sensor: Optional[RoarPyAccelerometerSensor] = None,
             slip_penalty_scale: float = 0.01,
             slip_threshold: float = 8.0,
+            min_speed_threshold: float = 15.0,
+            min_speed_penalty_scale: float = 0.1,
         ) -> None:
         super().__init__(actor, manuverable_waypoints, world, render_mode)
         self.location_sensor = location_sensor
@@ -71,6 +73,8 @@ class RoarRLSimEnv(RoarRLEnv):
         self.accelerometer_sensor = accelerometer_sensor
         self.slip_penalty_scale = slip_penalty_scale
         self.slip_threshold = slip_threshold
+        self.min_speed_threshold = min_speed_threshold
+        self.min_speed_penalty_scale = min_speed_penalty_scale
 
         self.waypoints_tracer = RoarPyWaypointsTracker(manuverable_waypoints)
         self._traced_projection : RoarPyWaypointsProjection = RoarPyWaypointsProjection(0,0.0)
@@ -130,6 +134,7 @@ class RoarRLSimEnv(RoarRLEnv):
         # Get collision data for potential penalty
         collision_impulse : np.ndarray = self.collision_sensor.get_last_gym_observation()
         collision_impulse_norm = np.linalg.norm(collision_impulse)
+        speed = np.linalg.norm(self.local_velocimeter_sensor.get_last_gym_observation())
 
         # Component 1: Progress reward
         # Reward forward progress along the track
@@ -143,16 +148,12 @@ class RoarRLSimEnv(RoarRLEnv):
         # Direct reward for going fast, off by default
         speed_bonus_reward = 0.0
         if self.speed_bonus_scale > 0:
-            velocity = self.local_velocimeter_sensor.get_last_gym_observation()
-            speed = np.linalg.norm(velocity)
             speed_bonus_reward = self.speed_bonus_scale * speed
 
         # Component 4: Collision penalty (per-timestep while in contact)
         # GT Sophy style: no termination, continuous penalty while scraping wall
         collision_reward = 0.0
         if collision_impulse_norm > self.collision_threshold:
-            velocity = self.local_velocimeter_sensor.get_last_gym_observation()
-            speed = np.linalg.norm(velocity)
             collision_reward = -self.wall_penalty_scale * (speed ** 2)
             info_dict["collision_speed_mps"] = speed
 
@@ -189,15 +190,30 @@ class RoarRLSimEnv(RoarRLEnv):
             info_dict["lateral_accel_mps2"] = lateral_accel
             info_dict["reward_slip_penalty"] = slip_penalty
 
+        # Component 6: Minimum speed penalty
+        # Forces agent to maintain speed, then slip penalty teaches corner limits
+        min_speed_penalty = 0.0
+        if speed < self.min_speed_threshold:
+            deficit = self.min_speed_threshold - speed
+            min_speed_penalty = -self.min_speed_penalty_scale * deficit
+        info_dict["reward_min_speed_penalty"] = min_speed_penalty
+
         # Combine components
-        total_reward = progress_reward + time_penalty_reward + speed_bonus_reward + collision_reward + slip_penalty
+        total_reward = (
+            progress_reward
+            + time_penalty_reward
+            + speed_bonus_reward
+            + collision_reward
+            + slip_penalty
+            + min_speed_penalty
+        )
 
         # Log components for debugging (visible in info_dict)
         info_dict["reward_progress"] = progress_reward
         info_dict["reward_time_penalty"] = time_penalty_reward
         info_dict["reward_speed_bonus"] = speed_bonus_reward
         info_dict["reward_collision"] = collision_reward
-        info_dict["speed_mps"] = np.linalg.norm(self.local_velocimeter_sensor.get_last_gym_observation())
+        info_dict["speed_mps"] = speed
 
         return total_reward
     
