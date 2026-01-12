@@ -137,6 +137,10 @@ SPEED_BONUS_SCALE = float(os.getenv("SPEED_BONUS_SCALE", "0.0"))
 COLLISION_THRESHOLD = float(os.getenv("COLLISION_THRESHOLD", "1.0"))
 WALL_PENALTY_SCALE = float(os.getenv("WALL_PENALTY_SCALE", "0.01"))
 
+# Slip penalty configuration (GT Sophy-style)
+SLIP_PENALTY_SCALE = float(os.getenv("SLIP_PENALTY_SCALE", "0.01"))
+SLIP_THRESHOLD = float(os.getenv("SLIP_THRESHOLD", "8.0"))
+
 # Observation configuration
 NUM_LIDAR_BEAMS = int(os.getenv("NUM_LIDAR_BEAMS", "60"))
 LIDAR_MAX_DISTANCE = float(os.getenv("LIDAR_MAX_DISTANCE", "50.0"))
@@ -211,6 +215,9 @@ def _create_single_env(rank: int, run_name: str, run_id: str) -> gym.Env:
             speed_bonus_scale=SPEED_BONUS_SCALE,
             collision_threshold=COLLISION_THRESHOLD,
             wall_penalty_scale=WALL_PENALTY_SCALE,
+            # Slip penalty config
+            slip_penalty_scale=SLIP_PENALTY_SCALE,
+            slip_threshold=SLIP_THRESHOLD,
         )
     )
     env = NaNCheckWrapper(env, name=f"env_{rank}")
@@ -276,6 +283,9 @@ def main():
             "speed_bonus_scale": SPEED_BONUS_SCALE,
             "collision_threshold": COLLISION_THRESHOLD,
             "wall_penalty_scale": WALL_PENALTY_SCALE,
+            # Slip penalty config
+            "slip_penalty_scale": SLIP_PENALTY_SCALE,
+            "slip_threshold": SLIP_THRESHOLD,
             # Observation config
             "num_lidar_beams": NUM_LIDAR_BEAMS,
             "lidar_max_distance": LIDAR_MAX_DISTANCE,
