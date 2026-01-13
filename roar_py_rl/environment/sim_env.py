@@ -150,8 +150,7 @@ class RoarRLSimEnv(RoarRLEnv):
         if self.speed_bonus_scale > 0:
             speed_bonus_reward = self.speed_bonus_scale * speed
 
-        # Component 4: Collision penalty (per-timestep while in contact)
-        # GT Sophy style: no termination, continuous penalty while scraping wall
+        # Component 4: Collision penalty
         collision_reward = 0.0
         if collision_impulse_norm > self.collision_threshold:
             collision_reward = -self.wall_penalty_scale * (speed ** 2)
@@ -233,8 +232,13 @@ class RoarRLSimEnv(RoarRLEnv):
         self._delta_distance_travelled = 0.0
 
     def is_terminated(self, observation : Any, action : Any, info_dict : Dict[str, Any]) -> bool:
-        # Termination is handled by the TimeLimit wrapper only.
-        return False
+        collision_impulse : np.ndarray = self.collision_sensor.get_last_gym_observation()
+        collision_impulse_norm = np.linalg.norm(collision_impulse)
+        if collision_impulse_norm > 0:
+            print(f"Collision detected with impulse {collision_impulse_norm}", self.collision_sensor.get_last_observation().impulse_normal)
+        if collision_impulse_norm > self.collision_threshold:
+            print("Terminated due to collision")
+            return True
 
     def is_truncated(self, observation : Any, action : Any, info_dict : Dict[str, Any]) -> bool:
         return False

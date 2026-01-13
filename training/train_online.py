@@ -12,7 +12,12 @@ from dotenv import load_dotenv, find_dotenv
 from stable_baselines3 import SAC
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
-from stable_baselines3.common.callbacks import CheckpointCallback, EveryNTimesteps, CallbackList
+from stable_baselines3.common.callbacks import (
+    BaseCallback,
+    CheckpointCallback,
+    EveryNTimesteps,
+    CallbackList,
+)
 from stable_baselines3.common.utils import set_random_seed
 from wandb.integration.sb3 import WandbCallback
 
@@ -113,6 +118,46 @@ class NaNCheckWrapper(gym.Wrapper):
                 f"(episode={self._episode}, step={self._step}): {reward}"
             )
         return obs, reward, terminated, truncated, info
+
+
+class MinSpeedPenaltyLogger(BaseCallback):
+    def __init__(
+        self,
+        info_key: str = "reward_min_speed_penalty",
+        log_key: str = "rollout/ep_speed_pen_mean",
+        verbose: int = 0,
+    ) -> None:
+        super().__init__(verbose)
+        self.info_key = info_key
+        self.log_key = log_key
+        self._episode_sums = None
+        self._episode_lengths = None
+
+    def _init_callback(self) -> None:
+        n_envs = self.training_env.num_envs
+        self._episode_sums = np.zeros(n_envs, dtype=np.float32)
+        self._episode_lengths = np.zeros(n_envs, dtype=np.int32)
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        dones = self.locals.get("dones")
+        if dones is None:
+            return True
+        for idx, info in enumerate(infos):
+            penalty = info.get(self.info_key, 0.0)
+            self._episode_sums[idx] += float(penalty)
+            self._episode_lengths[idx] += 1
+        if np.any(dones):
+            done_indices = np.where(dones)[0]
+            means = []
+            for idx in done_indices:
+                length = max(int(self._episode_lengths[idx]), 1)
+                means.append(float(self._episode_sums[idx]) / length)
+                self._episode_sums[idx] = 0.0
+                self._episode_lengths[idx] = 0
+            if means:
+                self.logger.record(self.log_key, float(np.mean(means)))
+        return True
 
 RUN_FPS = int(os.getenv("RUN_FPS", "25"))
 SUBSTEPS_PER_STEP = int(os.getenv("SUBSTEPS_PER_STEP", "5"))
@@ -357,6 +402,7 @@ def main():
         verbose=2,
         save_path=f"{models_path}/logs"
     )
+    min_speed_penalty_callback = MinSpeedPenaltyLogger()
     event_callback = EveryNTimesteps(
         n_steps=MODEL_SAVE_FREQ,
         callback=checkpoint_callback
@@ -364,6 +410,7 @@ def main():
 
     callbacks = CallbackList([
         wandb_callback,
+        min_speed_penalty_callback,
         checkpoint_callback,
         event_callback
     ])
