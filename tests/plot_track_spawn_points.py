@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import roar_py_carla
 
+DEFAULT_CONTROL_TIMESTEP = 0.05
+
 
 def _looks_like_vector(value: object) -> bool:
     return isinstance(value, (list, tuple, np.ndarray))
@@ -150,6 +152,8 @@ async def main() -> None:
     try:
         world = roar_py_instance.world
         world.set_asynchronous(False)
+        if world.control_timestep is None or world.control_timestep <= 0:
+            world.control_timestep = DEFAULT_CONTROL_TIMESTEP
         await world.step()
 
         waypoints = getattr(world, "maneuverable_waypoints", None)

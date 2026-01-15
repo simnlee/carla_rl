@@ -190,16 +190,20 @@ SLIP_THRESHOLD = float(os.getenv("SLIP_THRESHOLD", "8.0"))
 MIN_SPEED_THRESHOLD = float(os.getenv("MIN_SPEED_THRESHOLD", "15.0"))
 MIN_SPEED_PENALTY_SCALE = float(os.getenv("MIN_SPEED_PENALTY_SCALE", "0.1"))
 
+# Heading penalty configuration
+HEADING_PENALTY_SCALE = float(os.getenv("HEADING_PENALTY_SCALE", "0.3"))
+HEADING_PENALTY_THRESHOLD = float(os.getenv("HEADING_PENALTY_THRESHOLD", "0.15"))
+
 # Observation configuration
 NUM_LIDAR_BEAMS = int(os.getenv("NUM_LIDAR_BEAMS", "60"))
-LIDAR_MAX_DISTANCE = float(os.getenv("LIDAR_MAX_DISTANCE", "50.0"))
+LIDAR_MAX_DISTANCE = float(os.getenv("LIDAR_MAX_DISTANCE", "200.0"))
 
 # SAC training parameters
 training_params = dict(
     learning_rate=1e-4,
     batch_size=512,
     gamma=0.995,
-    ent_coef="auto",
+    ent_coef="auto_0.1",  # Minimum entropy coefficient of 0.1 to prevent collapse
     target_entropy="auto",
     use_sde=True,
     sde_sample_freq=RUN_FPS * 2,
@@ -271,6 +275,9 @@ def _create_single_env(rank: int, run_name: str, run_id: str) -> gym.Env:
             # Minimum speed penalty config
             min_speed_threshold=MIN_SPEED_THRESHOLD,
             min_speed_penalty_scale=MIN_SPEED_PENALTY_SCALE,
+            # Heading penalty config
+            heading_penalty_scale=HEADING_PENALTY_SCALE,
+            heading_penalty_threshold=HEADING_PENALTY_THRESHOLD,
         )
     )
     env = NaNCheckWrapper(env, name=f"env_{rank}")
@@ -342,6 +349,9 @@ def main():
             # Minimum speed penalty config
             "min_speed_threshold": MIN_SPEED_THRESHOLD,
             "min_speed_penalty_scale": MIN_SPEED_PENALTY_SCALE,
+            # Heading penalty config
+            "heading_penalty_scale": HEADING_PENALTY_SCALE,
+            "heading_penalty_threshold": HEADING_PENALTY_THRESHOLD,
             # Observation config
             "num_lidar_beams": NUM_LIDAR_BEAMS,
             "lidar_max_distance": LIDAR_MAX_DISTANCE,

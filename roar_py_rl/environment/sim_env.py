@@ -54,6 +54,9 @@ class RoarRLSimEnv(RoarRLEnv):
             slip_threshold: float = 8.0,
             min_speed_threshold: float = 15.0,
             min_speed_penalty_scale: float = 0.1,
+            # Heading penalty parameters
+            heading_penalty_scale: float = 0.3,
+            heading_penalty_threshold: float = 0.15,
         ) -> None:
         super().__init__(actor, manuverable_waypoints, world, render_mode)
         self.location_sensor = location_sensor
@@ -75,6 +78,10 @@ class RoarRLSimEnv(RoarRLEnv):
         self.slip_threshold = slip_threshold
         self.min_speed_threshold = min_speed_threshold
         self.min_speed_penalty_scale = min_speed_penalty_scale
+
+        # Heading penalty parameters
+        self.heading_penalty_scale = heading_penalty_scale
+        self.heading_penalty_threshold = heading_penalty_threshold
 
         self.waypoints_tracer = RoarPyWaypointsTracker(manuverable_waypoints)
         self._traced_projection : RoarPyWaypointsProjection = RoarPyWaypointsProjection(0,0.0)
@@ -197,6 +204,31 @@ class RoarRLSimEnv(RoarRLEnv):
             min_speed_penalty = -self.min_speed_penalty_scale * deficit
         info_dict["reward_min_speed_penalty"] = min_speed_penalty
 
+        # Component 7: Heading penalty
+        # Penalizes when car heading differs from track heading
+        # This teaches "follow the track direction" before crashes happen
+        heading_penalty = 0.0
+        if self.heading_penalty_scale > 0 and len(self.waypoint_information_distances) > 0:
+            # Get the nearest waypoint distance for heading reference
+            nearest_dist = min(self.waypoint_information_distances)
+            traced_forward = self.waypoints_tracer.trace_forward_projection(
+                self._traced_projection, nearest_dist
+            )
+            traced_wp = self.waypoints_tracer.get_interpolated_waypoint(traced_forward)
+
+            # Compute heading error: difference between track heading and car heading
+            car_yaw = self.roll_pitch_yaw_sensor.get_last_gym_observation()[2]
+            track_yaw = traced_wp.roll_pitch_yaw[2]
+            heading_error = abs(normalize_rad(track_yaw - car_yaw))
+
+            # Only penalize above threshold (small deviations are fine)
+            if heading_error > self.heading_penalty_threshold:
+                excess = heading_error - self.heading_penalty_threshold
+                heading_penalty = -self.heading_penalty_scale * excess
+
+            info_dict["heading_error_rad"] = heading_error
+        info_dict["reward_heading_penalty"] = heading_penalty
+
         # Combine components
         total_reward = (
             progress_reward
@@ -205,6 +237,7 @@ class RoarRLSimEnv(RoarRLEnv):
             + collision_reward
             + slip_penalty
             + min_speed_penalty
+            + heading_penalty
         )
 
         # Log components for debugging (visible in info_dict)
