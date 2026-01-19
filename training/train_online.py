@@ -120,11 +120,15 @@ class NaNCheckWrapper(gym.Wrapper):
         return obs, reward, terminated, truncated, info
 
 
-class MinSpeedPenaltyLogger(BaseCallback):
+class RewardComponentLogger(BaseCallback):
+    """
+    Generic callback to log mean reward components per episode.
+    Used to track individual ROAR Berkeley reward components.
+    """
     def __init__(
         self,
-        info_key: str = "reward_min_speed_penalty",
-        log_key: str = "rollout/ep_speed_pen_mean",
+        info_key: str,
+        log_key: str,
         verbose: int = 0,
     ) -> None:
         super().__init__(verbose)
@@ -144,48 +148,8 @@ class MinSpeedPenaltyLogger(BaseCallback):
         if dones is None:
             return True
         for idx, info in enumerate(infos):
-            penalty = info.get(self.info_key, 0.0)
-            self._episode_sums[idx] += float(penalty)
-            self._episode_lengths[idx] += 1
-        if np.any(dones):
-            done_indices = np.where(dones)[0]
-            means = []
-            for idx in done_indices:
-                length = max(int(self._episode_lengths[idx]), 1)
-                means.append(float(self._episode_sums[idx]) / length)
-                self._episode_sums[idx] = 0.0
-                self._episode_lengths[idx] = 0
-            if means:
-                self.logger.record(self.log_key, float(np.mean(means)))
-        return True
-
-
-class HeadingPenaltyLogger(BaseCallback):
-    def __init__(
-        self,
-        info_key: str = "reward_heading_penalty",
-        log_key: str = "rollout/ep_heading_pen_mean",
-        verbose: int = 0,
-    ) -> None:
-        super().__init__(verbose)
-        self.info_key = info_key
-        self.log_key = log_key
-        self._episode_sums = None
-        self._episode_lengths = None
-
-    def _init_callback(self) -> None:
-        n_envs = self.training_env.num_envs
-        self._episode_sums = np.zeros(n_envs, dtype=np.float32)
-        self._episode_lengths = np.zeros(n_envs, dtype=np.int32)
-
-    def _on_step(self) -> bool:
-        infos = self.locals.get("infos", [])
-        dones = self.locals.get("dones")
-        if dones is None:
-            return True
-        for idx, info in enumerate(infos):
-            penalty = info.get(self.info_key, 0.0)
-            self._episode_sums[idx] += float(penalty)
+            value = info.get(self.info_key, 0.0)
+            self._episode_sums[idx] += float(value)
             self._episode_lengths[idx] += 1
         if np.any(dones):
             done_indices = np.where(dones)[0]
@@ -216,24 +180,16 @@ PORT_STRIDE = int(os.getenv("PORT_STRIDE", "2"))
 SEED = int(os.getenv("SEED", "1"))
 RESUME_CHECKPOINT = os.getenv("RESUME_CHECKPOINT", "").strip()
 
-# Reward configuration
-PROGRESS_SCALE = float(os.getenv("PROGRESS_SCALE", "1.0"))
-TIME_PENALTY = float(os.getenv("TIME_PENALTY", "0.1"))
-SPEED_BONUS_SCALE = float(os.getenv("SPEED_BONUS_SCALE", "0.0"))
+# ROAR Berkeley style reward configuration
 COLLISION_THRESHOLD = float(os.getenv("COLLISION_THRESHOLD", "1.0"))
-WALL_PENALTY_SCALE = float(os.getenv("WALL_PENALTY_SCALE", "0.01"))
-
-# Slip penalty configuration (GT Sophy-style)
-SLIP_PENALTY_SCALE = float(os.getenv("SLIP_PENALTY_SCALE", "0.01"))
-SLIP_THRESHOLD = float(os.getenv("SLIP_THRESHOLD", "8.0"))
-
-# Minimum speed penalty configuration
-MIN_SPEED_THRESHOLD = float(os.getenv("MIN_SPEED_THRESHOLD", "15.0"))
-MIN_SPEED_PENALTY_SCALE = float(os.getenv("MIN_SPEED_PENALTY_SCALE", "0.1"))
-
-# Heading penalty configuration
-HEADING_PENALTY_SCALE = float(os.getenv("HEADING_PENALTY_SCALE", "0.3"))
-HEADING_PENALTY_THRESHOLD = float(os.getenv("HEADING_PENALTY_THRESHOLD", "0.15"))
+CHECKPOINT_REWARD = float(os.getenv("CHECKPOINT_REWARD", "1.0"))
+STEP_PENALTY = float(os.getenv("STEP_PENALTY", "1.0"))
+COLLISION_PENALTY = float(os.getenv("COLLISION_PENALTY", "25.0"))
+STALL_FRAMES_THRESHOLD = int(os.getenv("STALL_FRAMES_THRESHOLD", "10"))
+STALL_PENALTY = float(os.getenv("STALL_PENALTY", "25.0"))
+REVERSE_PENALTY = float(os.getenv("REVERSE_PENALTY", "25.0"))
+STEERING_DEADZONE = float(os.getenv("STEERING_DEADZONE", "0.01"))
+STEERING_DEADZONE_REWARD = float(os.getenv("STEERING_DEADZONE_REWARD", "0.1"))
 
 # Observation configuration
 NUM_LIDAR_BEAMS = int(os.getenv("NUM_LIDAR_BEAMS", "60"))
@@ -304,21 +260,16 @@ def _create_single_env(rank: int, run_name: str, run_id: str) -> gym.Env:
             # Lidar config
             num_lidar_beams=NUM_LIDAR_BEAMS,
             lidar_max_distance=LIDAR_MAX_DISTANCE,
-            # Reward config
-            progress_scale=PROGRESS_SCALE,
-            time_penalty=TIME_PENALTY,
-            speed_bonus_scale=SPEED_BONUS_SCALE,
+            # ROAR style reward config
             collision_threshold=COLLISION_THRESHOLD,
-            wall_penalty_scale=WALL_PENALTY_SCALE,
-            # Slip penalty config
-            slip_penalty_scale=SLIP_PENALTY_SCALE,
-            slip_threshold=SLIP_THRESHOLD,
-            # Minimum speed penalty config
-            min_speed_threshold=MIN_SPEED_THRESHOLD,
-            min_speed_penalty_scale=MIN_SPEED_PENALTY_SCALE,
-            # Heading penalty config
-            heading_penalty_scale=HEADING_PENALTY_SCALE,
-            heading_penalty_threshold=HEADING_PENALTY_THRESHOLD,
+            checkpoint_reward=CHECKPOINT_REWARD,
+            step_penalty=STEP_PENALTY,
+            collision_penalty=COLLISION_PENALTY,
+            stall_frames_threshold=STALL_FRAMES_THRESHOLD,
+            stall_penalty=STALL_PENALTY,
+            reverse_penalty=REVERSE_PENALTY,
+            steering_deadzone=STEERING_DEADZONE,
+            steering_deadzone_reward=STEERING_DEADZONE_REWARD,
         )
     )
     env = NaNCheckWrapper(env, name=f"env_{rank}")
@@ -378,21 +329,16 @@ def main():
             "port_stride": PORT_STRIDE,
             "seed": SEED,
             "run_fps": RUN_FPS,
-            # Reward config
-            "progress_scale": PROGRESS_SCALE,
-            "time_penalty": TIME_PENALTY,
-            "speed_bonus_scale": SPEED_BONUS_SCALE,
+            # ROAR Berkeley style reward config
             "collision_threshold": COLLISION_THRESHOLD,
-            "wall_penalty_scale": WALL_PENALTY_SCALE,
-            # Slip penalty config
-            "slip_penalty_scale": SLIP_PENALTY_SCALE,
-            "slip_threshold": SLIP_THRESHOLD,
-            # Minimum speed penalty config
-            "min_speed_threshold": MIN_SPEED_THRESHOLD,
-            "min_speed_penalty_scale": MIN_SPEED_PENALTY_SCALE,
-            # Heading penalty config
-            "heading_penalty_scale": HEADING_PENALTY_SCALE,
-            "heading_penalty_threshold": HEADING_PENALTY_THRESHOLD,
+            "checkpoint_reward": CHECKPOINT_REWARD,
+            "step_penalty": STEP_PENALTY,
+            "collision_penalty": COLLISION_PENALTY,
+            "stall_frames_threshold": STALL_FRAMES_THRESHOLD,
+            "stall_penalty": STALL_PENALTY,
+            "reverse_penalty": REVERSE_PENALTY,
+            "steering_deadzone": STEERING_DEADZONE,
+            "steering_deadzone_reward": STEERING_DEADZONE_REWARD,
             # Observation config
             "num_lidar_beams": NUM_LIDAR_BEAMS,
             "lidar_max_distance": LIDAR_MAX_DISTANCE,
@@ -453,8 +399,14 @@ def main():
         verbose=2,
         save_path=f"{models_path}/logs"
     )
-    min_speed_penalty_callback = MinSpeedPenaltyLogger()
-    heading_penalty_callback = HeadingPenaltyLogger()
+    # ROAR Berkeley reward component loggers
+    checkpoint_reward_callback = RewardComponentLogger("reward_checkpoint", "rollout/ep_checkpoint_mean")
+    step_penalty_callback = RewardComponentLogger("reward_step_penalty", "rollout/ep_step_pen_mean")
+    stalling_callback = RewardComponentLogger("reward_stalling", "rollout/ep_stalling_mean")
+    reverse_callback = RewardComponentLogger("reward_reverse", "rollout/ep_reverse_mean")
+    deadzone_callback = RewardComponentLogger("reward_deadzone", "rollout/ep_deadzone_mean")
+    collision_callback = RewardComponentLogger("reward_collision", "rollout/ep_collision_mean")
+
     event_callback = EveryNTimesteps(
         n_steps=MODEL_SAVE_FREQ,
         callback=checkpoint_callback
@@ -462,8 +414,12 @@ def main():
 
     callbacks = CallbackList([
         wandb_callback,
-        min_speed_penalty_callback,
-        heading_penalty_callback,
+        checkpoint_reward_callback,
+        step_penalty_callback,
+        stalling_callback,
+        reverse_callback,
+        deadzone_callback,
+        collision_callback,
         checkpoint_callback,
         event_callback
     ])

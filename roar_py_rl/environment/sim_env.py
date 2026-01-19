@@ -1,5 +1,5 @@
 from typing import List, Optional
-from roar_py_interface import RoarPyActor, RoarPySensor, RoarPyWaypoint, RoarPyWorld, RoarPyLocationInWorldSensor, RoarPyCollisionSensor, RoarPyVelocimeterSensor, RoarPyRollPitchYawSensor, RoarPyAccelerometerSensor, RoarPyWaypointsTracker, RoarPyWaypointsProjection
+from roar_py_interface import RoarPyActor, RoarPySensor, RoarPyWaypoint, RoarPyWorld, RoarPyLocationInWorldSensor, RoarPyCollisionSensor, RoarPyVelocimeterSensor, RoarPyRollPitchYawSensor, RoarPyWaypointsTracker, RoarPyWaypointsProjection
 from .base_env import RoarRLEnv
 from typing import Any, Dict, SupportsFloat, Tuple, Optional, Set
 import gymnasium as gym
@@ -41,22 +41,19 @@ class RoarRLSimEnv(RoarRLEnv):
             roll_pitch_yaw_sensor : RoarPyRollPitchYawSensor,
             local_velocimeter_sensor : RoarPyVelocimeterSensor,
             collision_sensor : RoarPyCollisionSensor,
-            collision_threshold : float = 30.0,
+            collision_threshold : float = 1.0,
             waypoint_information_distances : Set[float] = set([]),
             world: Optional[RoarPyWorld] = None,
             render_mode="rgb_array",
-            progress_scale: float = 1.0,
-            time_penalty: float = 0.1,
-            speed_bonus_scale: float = 0.0,
-            wall_penalty_scale: float = 0.01,
-            accelerometer_sensor: Optional[RoarPyAccelerometerSensor] = None,
-            slip_penalty_scale: float = 0.01,
-            slip_threshold: float = 8.0,
-            min_speed_threshold: float = 15.0,
-            min_speed_penalty_scale: float = 0.1,
-            # Heading penalty parameters
-            heading_penalty_scale: float = 0.3,
-            heading_penalty_threshold: float = 0.15,
+            # ROAR Berkeley style reward parameters
+            checkpoint_reward: float = 1.0,           # Reward per checkpoint crossed
+            step_penalty: float = 1.0,                # "Hot water" penalty per frame
+            collision_penalty: float = 25.0,          # Explicit crash penalty
+            stall_frames_threshold: int = 10,         # Frames before stalling penalty
+            stall_penalty: float = 25.0,              # Penalty when stuck
+            reverse_penalty: float = 25.0,            # Penalty for going backward
+            steering_deadzone: float = 0.01,          # Threshold for deadzone
+            steering_deadzone_reward: float = 0.1,    # Reward for staying in deadzone
         ) -> None:
         super().__init__(actor, manuverable_waypoints, world, render_mode)
         self.location_sensor = location_sensor
@@ -66,26 +63,23 @@ class RoarRLSimEnv(RoarRLEnv):
         self.collision_threshold = collision_threshold
         self.waypoint_information_distances = waypoint_information_distances
 
-        # Reward parameters
-        self.progress_scale = progress_scale
-        self.time_penalty = time_penalty
-        self.speed_bonus_scale = speed_bonus_scale
-        self.wall_penalty_scale = wall_penalty_scale
-
-        # Slip penalty parameters (GT Sophy-style)
-        self.accelerometer_sensor = accelerometer_sensor
-        self.slip_penalty_scale = slip_penalty_scale
-        self.slip_threshold = slip_threshold
-        self.min_speed_threshold = min_speed_threshold
-        self.min_speed_penalty_scale = min_speed_penalty_scale
-
-        # Heading penalty parameters
-        self.heading_penalty_scale = heading_penalty_scale
-        self.heading_penalty_threshold = heading_penalty_threshold
+        # ROAR Berkeley style reward parameters
+        self.checkpoint_reward = checkpoint_reward
+        self.step_penalty = step_penalty
+        self.collision_penalty = collision_penalty
+        self.stall_frames_threshold = stall_frames_threshold
+        self.stall_penalty = stall_penalty
+        self.reverse_penalty = reverse_penalty
+        self.steering_deadzone = steering_deadzone
+        self.steering_deadzone_reward = steering_deadzone_reward
 
         self.waypoints_tracer = RoarPyWaypointsTracker(manuverable_waypoints)
         self._traced_projection : RoarPyWaypointsProjection = RoarPyWaypointsProjection(0,0.0)
         self._delta_distance_travelled = 0.0
+
+        # State variables for new reward components
+        self._stall_counter = 0
+        self._last_waypoint_idx = 0
 
     @property
     def observation_space(self) -> gym.Space:
@@ -130,122 +124,103 @@ class RoarRLSimEnv(RoarRLEnv):
     @property
     def sensors_to_update(self) -> List[RoarPySensor]:
         sensors = [self.location_sensor, self.roll_pitch_yaw_sensor, self.local_velocimeter_sensor, self.collision_sensor]
-        if self.accelerometer_sensor is not None:
-            sensors.append(self.accelerometer_sensor)
         return [
             sensor for sensor in sensors
             if sensor not in self.roar_py_actor.get_sensors()
         ]
 
     def get_reward(self, observation : Any, action : Any, info_dict : Dict[str, Any]) -> SupportsFloat:
-        # Get collision data for potential penalty
+        """
+        ROAR Berkeley style reward function.
+
+        Components:
+        1. Checkpoint reward - discrete progress signal when crossing waypoints
+        2. Step penalty ("hot water") - constant negative pressure to encourage speed
+        3. Collision penalty - explicit penalty before termination
+        4. Stalling penalty - penalize being stuck
+        5. Reverse penalty - penalize going backward
+        6. Steering deadzone reward - encourage stable steering
+        """
+        speed = np.linalg.norm(self.local_velocimeter_sensor.get_last_gym_observation())
         collision_impulse : np.ndarray = self.collision_sensor.get_last_gym_observation()
         collision_impulse_norm = np.linalg.norm(collision_impulse)
-        speed = np.linalg.norm(self.local_velocimeter_sensor.get_last_gym_observation())
 
-        # Component 1: Progress reward
-        # Reward forward progress along the track
-        progress_reward = self.progress_scale * self._delta_distance_travelled
+        # Component 1: Checkpoint reward (ROAR Berkeley style)
+        # Reward given when crossing to next waypoint
+        checkpoint_reward = 0.0
+        current_waypoint_idx = self._traced_projection.waypoint_idx
+        if current_waypoint_idx > self._last_waypoint_idx:
+            # Crossed checkpoint(s) - give reward for each one crossed
+            checkpoints_crossed = current_waypoint_idx - self._last_waypoint_idx
+            checkpoint_reward = self.checkpoint_reward * checkpoints_crossed
+            self._last_waypoint_idx = current_waypoint_idx
+        elif current_waypoint_idx < self._last_waypoint_idx:
+            # Handle lap wrap-around (waypoint index resets)
+            if self._last_waypoint_idx > len(self.manuverable_waypoints) - 10:
+                # Likely wrapped around to start of track
+                checkpoints_crossed = (len(self.manuverable_waypoints) - self._last_waypoint_idx) + current_waypoint_idx
+                checkpoint_reward = self.checkpoint_reward * checkpoints_crossed
+            self._last_waypoint_idx = current_waypoint_idx
 
-        # Component 2: Time penalty
-        # Makes standing still costly, prevents "wait out the clock" strategy
-        time_penalty_reward = -self.time_penalty
+        # Component 2: Step penalty ("hot water")
+        # Creates constant negative pressure - only way to positive reward is progress
+        step_penalty_reward = -self.step_penalty
 
-        # Component 3: Speed bonus (optional)
-        # Direct reward for going fast, off by default
-        speed_bonus_reward = 0.0
-        if self.speed_bonus_scale > 0:
-            speed_bonus_reward = self.speed_bonus_scale * speed
-
-        # Component 4: Collision penalty
+        # Component 3: Collision penalty (applied before termination)
         collision_reward = 0.0
         if collision_impulse_norm > self.collision_threshold:
-            collision_reward = -self.wall_penalty_scale * (speed ** 2)
+            collision_reward = -self.collision_penalty
             info_dict["collision_speed_mps"] = speed
 
-        # Component 5: Slip penalty (lateral acceleration proxy)
-        # Penalizes high lateral acceleration indicating tire slip / loss of grip
-        slip_penalty = 0.0
-        if self.accelerometer_sensor is not None:
-            accel_world = self.accelerometer_sensor.get_last_gym_observation()
+        # Component 4: Stalling penalty
+        # Penalize being stuck (speed < 1 m/s for too long)
+        stalling_penalty = 0.0
+        if speed < 1.0:
+            self._stall_counter += 1
+            if self._stall_counter > self.stall_frames_threshold:
+                stalling_penalty = -self.stall_penalty
+        else:
+            self._stall_counter = 0
 
-            # Convert world-frame acceleration to local-frame using vehicle orientation
-            roll_pitch_yaw = self.roll_pitch_yaw_sensor.get_last_gym_observation()
-            roll, pitch, yaw = roll_pitch_yaw
-            cr, sr = np.cos(roll), np.sin(roll)
-            cp, sp = np.cos(pitch), np.sin(pitch)
-            cy, sy = np.cos(yaw), np.sin(yaw)
-            # Rotation matrix from local to world (Z-Y-X / yaw-pitch-roll)
-            # We need the transpose to go from world to local
-            rotation = np.array([
-                [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
-                [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
-                [-sp,     cp * sr,                cp * cr],
-            ], dtype=np.float32)
-            accel_local = rotation.T @ accel_world
+        # Component 5: Reverse progress penalty
+        # Penalize going backward through checkpoints
+        reverse_penalty = 0.0
+        if self._delta_distance_travelled < -1.0:
+            reverse_penalty = -self.reverse_penalty
 
-            # In local frame: [forward, lateral, vertical]
-            # Lateral acceleration (y component) indicates sideways force / tire slip
-            lateral_accel = abs(accel_local[1])
+        # Component 6: Steering deadzone reward
+        # Encourage stable steering (reduces wobbling at high speeds)
+        deadzone_reward = 0.0
+        # Extract steering from action (handle both dict and array formats)
+        if isinstance(action, dict):
+            steering = action.get("steer", 0.0)
+        elif hasattr(action, '__getitem__'):
+            steering = action[1] if len(action) > 1 else 0.0
+        else:
+            steering = 0.0
+        if abs(steering) < self.steering_deadzone:
+            deadzone_reward = self.steering_deadzone_reward
 
-            # Only penalize above threshold (normal cornering is fine)
-            if lateral_accel > self.slip_threshold:
-                excess = lateral_accel - self.slip_threshold
-                slip_penalty = -self.slip_penalty_scale * (excess ** 2)
-
-            info_dict["lateral_accel_mps2"] = lateral_accel
-            info_dict["reward_slip_penalty"] = slip_penalty
-
-        # Component 6: Minimum speed penalty
-        # Forces agent to maintain speed, then slip penalty teaches corner limits
-        min_speed_penalty = 0.0
-        if speed < self.min_speed_threshold:
-            deficit = self.min_speed_threshold - speed
-            min_speed_penalty = -self.min_speed_penalty_scale * deficit
-        info_dict["reward_min_speed_penalty"] = min_speed_penalty
-
-        # Component 7: Heading penalty
-        # Penalizes when car heading differs from track heading
-        # This teaches "follow the track direction" before crashes happen
-        heading_penalty = 0.0
-        if self.heading_penalty_scale > 0 and len(self.waypoint_information_distances) > 0:
-            # Get the nearest waypoint distance for heading reference
-            nearest_dist = min(self.waypoint_information_distances)
-            traced_forward = self.waypoints_tracer.trace_forward_projection(
-                self._traced_projection, nearest_dist
-            )
-            traced_wp = self.waypoints_tracer.get_interpolated_waypoint(traced_forward)
-
-            # Compute heading error: difference between track heading and car heading
-            car_yaw = self.roll_pitch_yaw_sensor.get_last_gym_observation()[2]
-            track_yaw = traced_wp.roll_pitch_yaw[2]
-            heading_error = abs(normalize_rad(track_yaw - car_yaw))
-
-            # Only penalize above threshold (small deviations are fine)
-            if heading_error > self.heading_penalty_threshold:
-                excess = heading_error - self.heading_penalty_threshold
-                heading_penalty = -self.heading_penalty_scale * excess
-
-            info_dict["heading_error_rad"] = heading_error
-        info_dict["reward_heading_penalty"] = heading_penalty
-
-        # Combine components
+        # Combine all components
         total_reward = (
-            progress_reward
-            + time_penalty_reward
-            + speed_bonus_reward
+            checkpoint_reward
+            + step_penalty_reward
             + collision_reward
-            + slip_penalty
-            + min_speed_penalty
-            + heading_penalty
+            + stalling_penalty
+            + reverse_penalty
+            + deadzone_reward
         )
 
-        # Log components for debugging (visible in info_dict)
-        info_dict["reward_progress"] = progress_reward
-        info_dict["reward_time_penalty"] = time_penalty_reward
-        info_dict["reward_speed_bonus"] = speed_bonus_reward
+        # Log all components for debugging (visible in info_dict and wandb)
+        info_dict["reward_checkpoint"] = checkpoint_reward
+        info_dict["reward_step_penalty"] = step_penalty_reward
         info_dict["reward_collision"] = collision_reward
+        info_dict["reward_stalling"] = stalling_penalty
+        info_dict["reward_reverse"] = reverse_penalty
+        info_dict["reward_deadzone"] = deadzone_reward
         info_dict["speed_mps"] = speed
+        info_dict["stall_counter"] = self._stall_counter
+        info_dict["waypoint_idx"] = current_waypoint_idx
 
         return total_reward
     
@@ -263,6 +238,8 @@ class RoarRLSimEnv(RoarRLEnv):
     def _reset(self) -> None:
         self._perform_waypoint_trace()
         self._delta_distance_travelled = 0.0
+        self._stall_counter = 0
+        self._last_waypoint_idx = self._traced_projection.waypoint_idx
 
     def is_terminated(self, observation : Any, action : Any, info_dict : Dict[str, Any]) -> bool:
         collision_impulse : np.ndarray = self.collision_sensor.get_last_gym_observation()

@@ -348,21 +348,16 @@ async def initialize_roar_env(
     # Lidar config
     num_lidar_beams: int = 60,
     lidar_max_distance: float = 50.0,
-    # Reward config
-    progress_scale: float = 1.0,
-    time_penalty: float = 0.1,
-    speed_bonus_scale: float = 0.0,
+    # ROAR Berkeley style reward config
     collision_threshold: float = 1.0,
-    wall_penalty_scale: float = 0.01,
-    # Slip penalty config (GT Sophy-style)
-    slip_penalty_scale: float = 0.01,
-    slip_threshold: float = 8.0,
-    # Minimum speed penalty config
-    min_speed_threshold: float = 15.0,
-    min_speed_penalty_scale: float = 0.1,
-    # Heading penalty config
-    heading_penalty_scale: float = 0.3,
-    heading_penalty_threshold: float = 0.15,
+    checkpoint_reward: float = 1.0,
+    step_penalty: float = 1.0,
+    collision_penalty: float = 25.0,
+    stall_frames_threshold: int = 10,
+    stall_penalty: float = 25.0,
+    reverse_penalty: float = 25.0,
+    steering_deadzone: float = 0.01,
+    steering_deadzone_reward: float = 0.1,
 ):
     carla_client = carla.Client(carla_host, carla_port)
     carla_client.set_timeout(15.0)
@@ -454,17 +449,14 @@ async def initialize_roar_env(
         waypoint_information_distances=set(waypoint_information_distances),
         world=world,
         collision_threshold=collision_threshold,
-        progress_scale=progress_scale,
-        time_penalty=time_penalty,
-        speed_bonus_scale=speed_bonus_scale,
-        wall_penalty_scale=wall_penalty_scale,
-        accelerometer_sensor=accelerometer_sensor,
-        slip_penalty_scale=slip_penalty_scale,
-        slip_threshold=slip_threshold,
-        min_speed_threshold=min_speed_threshold,
-        min_speed_penalty_scale=min_speed_penalty_scale,
-        heading_penalty_scale=heading_penalty_scale,
-        heading_penalty_threshold=heading_penalty_threshold,
+        checkpoint_reward=checkpoint_reward,
+        step_penalty=step_penalty,
+        collision_penalty=collision_penalty,
+        stall_frames_threshold=stall_frames_threshold,
+        stall_penalty=stall_penalty,
+        reverse_penalty=reverse_penalty,
+        steering_deadzone=steering_deadzone,
+        steering_deadzone_reward=steering_deadzone_reward,
     )
     env = SimplifyCarlaActionFilter(env)
     env = LidarObservationWrapper(env, lidar_key="lidar", num_beams=num_lidar_beams, max_distance=lidar_max_distance)
