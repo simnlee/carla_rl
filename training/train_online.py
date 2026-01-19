@@ -159,6 +159,47 @@ class MinSpeedPenaltyLogger(BaseCallback):
                 self.logger.record(self.log_key, float(np.mean(means)))
         return True
 
+
+class HeadingPenaltyLogger(BaseCallback):
+    def __init__(
+        self,
+        info_key: str = "reward_heading_penalty",
+        log_key: str = "rollout/ep_heading_pen_mean",
+        verbose: int = 0,
+    ) -> None:
+        super().__init__(verbose)
+        self.info_key = info_key
+        self.log_key = log_key
+        self._episode_sums = None
+        self._episode_lengths = None
+
+    def _init_callback(self) -> None:
+        n_envs = self.training_env.num_envs
+        self._episode_sums = np.zeros(n_envs, dtype=np.float32)
+        self._episode_lengths = np.zeros(n_envs, dtype=np.int32)
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        dones = self.locals.get("dones")
+        if dones is None:
+            return True
+        for idx, info in enumerate(infos):
+            penalty = info.get(self.info_key, 0.0)
+            self._episode_sums[idx] += float(penalty)
+            self._episode_lengths[idx] += 1
+        if np.any(dones):
+            done_indices = np.where(dones)[0]
+            means = []
+            for idx in done_indices:
+                length = max(int(self._episode_lengths[idx]), 1)
+                means.append(float(self._episode_sums[idx]) / length)
+                self._episode_sums[idx] = 0.0
+                self._episode_lengths[idx] = 0
+            if means:
+                self.logger.record(self.log_key, float(np.mean(means)))
+        return True
+
+
 RUN_FPS = int(os.getenv("RUN_FPS", "25"))
 SUBSTEPS_PER_STEP = int(os.getenv("SUBSTEPS_PER_STEP", "5"))
 MODEL_SAVE_FREQ = int(os.getenv("MODEL_SAVE_FREQ", "50000"))
@@ -203,7 +244,7 @@ training_params = dict(
     learning_rate=1e-4,
     batch_size=512,
     gamma=0.995,
-    ent_coef="auto_0.1",  # Minimum entropy coefficient of 0.1 to prevent collapse
+    ent_coef="auto_0.1",
     target_entropy="auto",
     use_sde=True,
     sde_sample_freq=RUN_FPS * 2,
@@ -413,6 +454,7 @@ def main():
         save_path=f"{models_path}/logs"
     )
     min_speed_penalty_callback = MinSpeedPenaltyLogger()
+    heading_penalty_callback = HeadingPenaltyLogger()
     event_callback = EveryNTimesteps(
         n_steps=MODEL_SAVE_FREQ,
         callback=checkpoint_callback
@@ -421,6 +463,7 @@ def main():
     callbacks = CallbackList([
         wandb_callback,
         min_speed_penalty_callback,
+        heading_penalty_callback,
         checkpoint_callback,
         event_callback
     ])

@@ -39,6 +39,9 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
         slip_threshold: float = 8.0,
         min_speed_threshold: float = 15.0,
         min_speed_penalty_scale: float = 0.1,
+        # Heading penalty parameters
+        heading_penalty_scale: float = 0.3,
+        heading_penalty_threshold: float = 0.15,
     ):
         super().__init__(
             actor,
@@ -60,6 +63,8 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
             slip_threshold=slip_threshold,
             min_speed_threshold=min_speed_threshold,
             min_speed_penalty_scale=min_speed_penalty_scale,
+            heading_penalty_scale=heading_penalty_scale,
+            heading_penalty_threshold=heading_penalty_threshold,
         )
 
     def reset_vehicle(self) -> None:
