@@ -30,8 +30,8 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
         waypoint_information_distances=set([]),
         world=None,
         render_mode="rgb_array",
-        # ROAR Berkeley style reward parameters
-        checkpoint_reward: float = 1.0,
+        # ROAR Berkeley style reward parameters (adapted to continuous progress)
+        progress_scale: float = 15.0,
         step_penalty: float = 1.0,
         collision_penalty: float = 25.0,
         stall_frames_threshold: int = 10,
@@ -39,6 +39,9 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
         reverse_penalty: float = 25.0,
         steering_deadzone: float = 0.01,
         steering_deadzone_reward: float = 0.1,
+        heading_penalty_scale: float = 0.1,
+        heading_penalty_threshold: float = 0.4,
+        heading_lookahead: float = 10.0,
     ):
         super().__init__(
             actor,
@@ -51,7 +54,7 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
             waypoint_information_distances=waypoint_information_distances,
             world=world,
             render_mode=render_mode,
-            checkpoint_reward=checkpoint_reward,
+            progress_scale=progress_scale,
             step_penalty=step_penalty,
             collision_penalty=collision_penalty,
             stall_frames_threshold=stall_frames_threshold,
@@ -59,6 +62,9 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
             reverse_penalty=reverse_penalty,
             steering_deadzone=steering_deadzone,
             steering_deadzone_reward=steering_deadzone_reward,
+            heading_penalty_scale=heading_penalty_scale,
+            heading_penalty_threshold=heading_penalty_threshold,
+            heading_lookahead=heading_lookahead,
         )
 
     def reset_vehicle(self) -> None:

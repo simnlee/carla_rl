@@ -43,24 +43,23 @@ RUN_NAME = os.getenv("RUN_NAME", "Denser_Waypoints_And_Collision_Detection")
 ENABLE_RENDERING = os.getenv("ENABLE_RENDERING", "true") == "true"
 SEED = int(os.getenv("SEED", "1"))
 
-# Reward configuration (must match training)
-PROGRESS_SCALE = float(os.getenv("PROGRESS_SCALE", "1.0"))
-TIME_PENALTY = float(os.getenv("TIME_PENALTY", "0.1"))
-SPEED_BONUS_SCALE = float(os.getenv("SPEED_BONUS_SCALE", "0.0"))
+# ROAR Berkeley style reward configuration (must match training)
 COLLISION_THRESHOLD = float(os.getenv("COLLISION_THRESHOLD", "1.0"))
-WALL_PENALTY_SCALE = float(os.getenv("WALL_PENALTY_SCALE", "0.01"))
-
-# Slip penalty configuration (must match training)
-SLIP_PENALTY_SCALE = float(os.getenv("SLIP_PENALTY_SCALE", "0.01"))
-SLIP_THRESHOLD = float(os.getenv("SLIP_THRESHOLD", "8.0"))
-
-# Minimum speed penalty configuration (must match training)
-MIN_SPEED_THRESHOLD = float(os.getenv("MIN_SPEED_THRESHOLD", "15.0"))
-MIN_SPEED_PENALTY_SCALE = float(os.getenv("MIN_SPEED_PENALTY_SCALE", "0.1"))
+PROGRESS_SCALE = float(os.getenv("PROGRESS_SCALE", "15.0"))
+STEP_PENALTY = float(os.getenv("STEP_PENALTY", "1.0"))
+COLLISION_PENALTY = float(os.getenv("COLLISION_PENALTY", "25.0"))
+STALL_FRAMES_THRESHOLD = int(os.getenv("STALL_FRAMES_THRESHOLD", "10"))
+STALL_PENALTY = float(os.getenv("STALL_PENALTY", "25.0"))
+REVERSE_PENALTY = float(os.getenv("REVERSE_PENALTY", "25.0"))
+STEERING_DEADZONE = float(os.getenv("STEERING_DEADZONE", "0.01"))
+STEERING_DEADZONE_REWARD = float(os.getenv("STEERING_DEADZONE_REWARD", "0.1"))
+HEADING_PENALTY_SCALE = float(os.getenv("HEADING_PENALTY_SCALE", "0.1"))
+HEADING_PENALTY_THRESHOLD = float(os.getenv("HEADING_PENALTY_THRESHOLD", "0.4"))
+HEADING_LOOKAHEAD = float(os.getenv("HEADING_LOOKAHEAD", "10.0"))
 
 # Observation configuration (must match training)
 NUM_LIDAR_BEAMS = int(os.getenv("NUM_LIDAR_BEAMS", "60"))
-LIDAR_MAX_DISTANCE = float(os.getenv("LIDAR_MAX_DISTANCE", "50.0"))
+LIDAR_MAX_DISTANCE = float(os.getenv("LIDAR_MAX_DISTANCE", "200.0"))
 
 def find_latest_model(root_path: Path) -> Optional[Path]:
     """
@@ -89,18 +88,19 @@ def get_env(wandb_run, video_dir: Path) -> gym.Env:
         # Lidar config (must match training)
         num_lidar_beams=NUM_LIDAR_BEAMS,
         lidar_max_distance=LIDAR_MAX_DISTANCE,
-        # Reward config (must match training)
-        progress_scale=PROGRESS_SCALE,
-        time_penalty=TIME_PENALTY,
-        speed_bonus_scale=SPEED_BONUS_SCALE,
+        # ROAR style reward config (adapted to continuous progress)
         collision_threshold=COLLISION_THRESHOLD,
-        wall_penalty_scale=WALL_PENALTY_SCALE,
-        # Slip penalty config (must match training)
-        slip_penalty_scale=SLIP_PENALTY_SCALE,
-        slip_threshold=SLIP_THRESHOLD,
-        # Minimum speed penalty config (must match training)
-        min_speed_threshold=MIN_SPEED_THRESHOLD,
-        min_speed_penalty_scale=MIN_SPEED_PENALTY_SCALE,
+        progress_scale=PROGRESS_SCALE,
+        step_penalty=STEP_PENALTY,
+        collision_penalty=COLLISION_PENALTY,
+        stall_frames_threshold=STALL_FRAMES_THRESHOLD,
+        stall_penalty=STALL_PENALTY,
+        reverse_penalty=REVERSE_PENALTY,
+        steering_deadzone=STEERING_DEADZONE,
+        steering_deadzone_reward=STEERING_DEADZONE_REWARD,
+        heading_penalty_scale=HEADING_PENALTY_SCALE,
+        heading_penalty_threshold=HEADING_PENALTY_THRESHOLD,
+        heading_lookahead=HEADING_LOOKAHEAD,
     ))
     env = gym.wrappers.FlattenObservation(env)
     env = FlattenActionWrapper(env)
