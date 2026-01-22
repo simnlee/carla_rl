@@ -57,6 +57,7 @@ class RoarRLSimEnv(RoarRLEnv):
             heading_penalty_scale: float = 0.1,       # Weak heading penalty to provide steering gradient
             heading_penalty_threshold: float = 0.4,   # Threshold before penalty applies (0.4 rad = ~23 deg)
             heading_lookahead: float = 10.0,          # Lookahead distance for heading calculation
+            speed_heading_penalty_scale: float = 0.0, # Speed-dependent heading penalty (better for racing lines)
         ) -> None:
         super().__init__(actor, manuverable_waypoints, world, render_mode)
         self.location_sensor = location_sensor
@@ -78,6 +79,7 @@ class RoarRLSimEnv(RoarRLEnv):
         self.heading_penalty_scale = heading_penalty_scale
         self.heading_penalty_threshold = heading_penalty_threshold
         self.heading_lookahead = heading_lookahead
+        self.speed_heading_penalty_scale = speed_heading_penalty_scale
 
         self.waypoints_tracer = RoarPyWaypointsTracker(manuverable_waypoints)
         self._traced_projection : RoarPyWaypointsProjection = RoarPyWaypointsProjection(0,0.0)
@@ -145,7 +147,8 @@ class RoarRLSimEnv(RoarRLEnv):
         4. Stalling penalty - penalize being stuck
         5. Reverse penalty - penalize going backward
         6. Steering deadzone reward - encourage stable steering
-        7. Heading penalty - weak penalty to provide steering gradient (allows racing lines)
+        7. Heading penalty - weak penalty to provide steering gradient (DEPRECATED)
+        8. Speed × Heading penalty - penalizes "too fast for corner" (allows racing lines)
         """
         speed = np.linalg.norm(self.local_velocimeter_sensor.get_last_gym_observation())
         collision_impulse : np.ndarray = self.collision_sensor.get_last_gym_observation()
@@ -194,8 +197,7 @@ class RoarRLSimEnv(RoarRLEnv):
         if abs(steering) < self.steering_deadzone:
             deadzone_reward = self.steering_deadzone_reward
 
-        # Component 7: Heading penalty (weak, with lookahead)
-        # Provides steering gradient while allowing racing lines
+        # Component 7: Heading penalty (fixed) - DEPRECATED, use speed-based instead
         heading_penalty = 0.0
         if self.heading_penalty_scale > 0:
             # Use lookahead distance for preview (better for smooth steering)
@@ -215,6 +217,28 @@ class RoarRLSimEnv(RoarRLEnv):
 
             info_dict["heading_error_rad"] = heading_error
 
+        # Component 8: Speed × Heading penalty - NEW
+        # Penalizes "too fast for corner" behavior while allowing racing lines
+        speed_heading_penalty = 0.0
+        if self.speed_heading_penalty_scale > 0:
+            # Reuse heading_error from above if already calculated
+            if "heading_error_rad" not in info_dict:
+                traced_forward = self.waypoints_tracer.trace_forward_projection(
+                    self._traced_projection, self.heading_lookahead
+                )
+                traced_wp = self.waypoints_tracer.get_interpolated_waypoint(traced_forward)
+                car_yaw = self.roll_pitch_yaw_sensor.get_last_gym_observation()[2]
+                track_yaw = traced_wp.roll_pitch_yaw[2]
+                heading_error = abs(normalize_rad(track_yaw - car_yaw))
+                info_dict["heading_error_rad"] = heading_error
+            else:
+                heading_error = info_dict["heading_error_rad"]
+
+            # Only penalize if exceeds threshold
+            if heading_error > self.heading_penalty_threshold:
+                excess = heading_error - self.heading_penalty_threshold
+                speed_heading_penalty = -self.speed_heading_penalty_scale * speed * excess
+
         # Combine all components
         total_reward = (
             progress_reward
@@ -224,6 +248,7 @@ class RoarRLSimEnv(RoarRLEnv):
             + reverse_penalty
             + deadzone_reward
             + heading_penalty
+            + speed_heading_penalty
         )
 
         # Log all components for debugging (visible in info_dict and wandb)
@@ -234,6 +259,7 @@ class RoarRLSimEnv(RoarRLEnv):
         info_dict["reward_reverse"] = reverse_penalty
         info_dict["reward_deadzone"] = deadzone_reward
         info_dict["reward_heading_penalty"] = heading_penalty
+        info_dict["reward_speed_heading_penalty"] = speed_heading_penalty
         info_dict["speed_mps"] = speed
         info_dict["stall_counter"] = self._stall_counter
         info_dict["waypoint_idx"] = self._traced_projection.waypoint_idx

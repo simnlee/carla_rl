@@ -42,6 +42,8 @@ PROJECT_NAME = os.getenv("PROJECT_NAME", "ROAR_PY_RL")
 RUN_NAME = os.getenv("RUN_NAME", "Denser_Waypoints_And_Collision_Detection")
 ENABLE_RENDERING = os.getenv("ENABLE_RENDERING", "true") == "true"
 SEED = int(os.getenv("SEED", "1"))
+_EVAL_SPAWN_POINT_INDEX = os.getenv("EVAL_SPAWN_POINT_INDEX", "").strip()
+EVAL_SPAWN_POINT_INDEX = int(_EVAL_SPAWN_POINT_INDEX) if _EVAL_SPAWN_POINT_INDEX else None
 
 # ROAR Berkeley style reward configuration (must match training)
 COLLISION_THRESHOLD = float(os.getenv("COLLISION_THRESHOLD", "1.0"))
@@ -101,6 +103,7 @@ def get_env(wandb_run, video_dir: Path) -> gym.Env:
         heading_penalty_scale=HEADING_PENALTY_SCALE,
         heading_penalty_threshold=HEADING_PENALTY_THRESHOLD,
         heading_lookahead=HEADING_LOOKAHEAD,
+        spawn_point_index=EVAL_SPAWN_POINT_INDEX,
     ))
     env = gym.wrappers.FlattenObservation(env)
     env = FlattenActionWrapper(env)

@@ -361,6 +361,8 @@ async def initialize_roar_env(
     heading_penalty_scale: float = 0.1,
     heading_penalty_threshold: float = 0.4,
     heading_lookahead: float = 10.0,
+    speed_heading_penalty_scale: float = 0.0,
+    spawn_point_index: Optional[int] = None,
 ):
     carla_client = carla.Client(carla_host, carla_port)
     carla_client.set_timeout(15.0)
@@ -379,7 +381,15 @@ async def initialize_roar_env(
     await world.step()
     roar_py_instance.clean_actors_not_registered(["vehicle.*", "sensor.*"])
 
-    spawn_point = world.spawn_points[0]
+    spawn_points = world.spawn_points
+    if spawn_point_index is not None:
+        if spawn_point_index < 0 or spawn_point_index >= len(spawn_points):
+            raise ValueError(
+                f"spawn_point_index {spawn_point_index} out of range (0..{len(spawn_points) - 1})"
+            )
+        spawn_point = spawn_points[spawn_point_index]
+    else:
+        spawn_point = spawn_points[1]
 
     vehicle = world.spawn_vehicle(
         "vehicle.tesla.model3",
@@ -463,6 +473,8 @@ async def initialize_roar_env(
         heading_penalty_scale=heading_penalty_scale,
         heading_penalty_threshold=heading_penalty_threshold,
         heading_lookahead=heading_lookahead,
+        speed_heading_penalty_scale=speed_heading_penalty_scale,
+        fixed_spawn_point_index=spawn_point_index,
     )
     env = SimplifyCarlaActionFilter(env)
     env = LidarObservationWrapper(env, lidar_key="lidar", num_beams=num_lidar_beams, max_distance=lidar_max_distance)

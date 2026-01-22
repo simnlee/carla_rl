@@ -42,6 +42,8 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
         heading_penalty_scale: float = 0.1,
         heading_penalty_threshold: float = 0.4,
         heading_lookahead: float = 10.0,
+        speed_heading_penalty_scale: float = 0.0,
+        fixed_spawn_point_index: Optional[int] = None,
     ):
         super().__init__(
             actor,
@@ -65,7 +67,9 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
             heading_penalty_scale=heading_penalty_scale,
             heading_penalty_threshold=heading_penalty_threshold,
             heading_lookahead=heading_lookahead,
+            speed_heading_penalty_scale=speed_heading_penalty_scale,
         )
+        self.fixed_spawn_point_index = fixed_spawn_point_index
 
     def reset_vehicle(self) -> None:
         # assert isinstance(self.roar_py_actor, RoarPyCarlaVehicle)
@@ -73,7 +77,15 @@ class RoarRLCarlaSimEnv(RoarRLSimEnv):
         vehicle : RoarPyCarlaVehicle = self.roar_py_actor
 
         spawn_points = self.roar_py_world.spawn_points
-        next_spawn_loc, next_spawn_rpy = spawn_points[np.random.randint(len(spawn_points))]
+        if self.fixed_spawn_point_index is None:
+            spawn_index = np.random.randint(len(spawn_points))
+        else:
+            spawn_index = self.fixed_spawn_point_index
+            if spawn_index < 0 or spawn_index >= len(spawn_points):
+                raise ValueError(
+                    f"fixed_spawn_point_index {spawn_index} out of range (0..{len(spawn_points) - 1})"
+                )
+        next_spawn_loc, next_spawn_rpy = spawn_points[spawn_index]
         next_spawn_loc, next_spawn_rpy = next_spawn_loc.copy(), next_spawn_rpy.copy()
 
         rotated_extent = vehicle.bounding_box.extent.copy()

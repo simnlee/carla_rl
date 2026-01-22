@@ -193,6 +193,7 @@ STEERING_DEADZONE_REWARD = float(os.getenv("STEERING_DEADZONE_REWARD", "0.1"))
 HEADING_PENALTY_SCALE = float(os.getenv("HEADING_PENALTY_SCALE", "0.1"))
 HEADING_PENALTY_THRESHOLD = float(os.getenv("HEADING_PENALTY_THRESHOLD", "0.4"))
 HEADING_LOOKAHEAD = float(os.getenv("HEADING_LOOKAHEAD", "10.0"))
+SPEED_HEADING_PENALTY_SCALE = float(os.getenv("SPEED_HEADING_PENALTY_SCALE", "0.0"))
 
 # Observation configuration
 NUM_LIDAR_BEAMS = int(os.getenv("NUM_LIDAR_BEAMS", "60"))
@@ -276,6 +277,7 @@ def _create_single_env(rank: int, run_name: str, run_id: str) -> gym.Env:
             heading_penalty_scale=HEADING_PENALTY_SCALE,
             heading_penalty_threshold=HEADING_PENALTY_THRESHOLD,
             heading_lookahead=HEADING_LOOKAHEAD,
+            speed_heading_penalty_scale=SPEED_HEADING_PENALTY_SCALE,
         )
     )
     env = NaNCheckWrapper(env, name=f"env_{rank}")
@@ -348,6 +350,7 @@ def main():
             "heading_penalty_scale": HEADING_PENALTY_SCALE,
             "heading_penalty_threshold": HEADING_PENALTY_THRESHOLD,
             "heading_lookahead": HEADING_LOOKAHEAD,
+            "speed_heading_penalty_scale": SPEED_HEADING_PENALTY_SCALE,
             # Observation config
             "num_lidar_beams": NUM_LIDAR_BEAMS,
             "lidar_max_distance": LIDAR_MAX_DISTANCE,
@@ -416,6 +419,7 @@ def main():
     deadzone_callback = RewardComponentLogger("reward_deadzone", "rollout/ep_deadzone_mean")
     collision_callback = RewardComponentLogger("reward_collision", "rollout/ep_collision_mean")
     heading_penalty_callback = RewardComponentLogger("reward_heading_penalty", "rollout/ep_heading_pen_mean")
+    speed_heading_penalty_callback = RewardComponentLogger("reward_speed_heading_penalty", "rollout/ep_speed_heading_pen_mean")
 
     event_callback = EveryNTimesteps(
         n_steps=MODEL_SAVE_FREQ,
@@ -431,6 +435,7 @@ def main():
         deadzone_callback,
         collision_callback,
         heading_penalty_callback,
+        speed_heading_penalty_callback,
         checkpoint_callback,
         event_callback
     ])
